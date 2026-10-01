@@ -15,6 +15,7 @@ Tab title, taskbar, color, and alert awareness for KDE Konsole and Linux termina
   - Sets tab title (`Session.setTitle 0`) and window title / taskbar entry (`Session.setTitle 1`).
   - Colors tabs: Amber (`#f59e0b`) while active, Emerald Green (`#10b981`) upon completion, Red (`#ef4444`) on failure, and Purple (`#8b5cf6`) when user input or permission is required.
   - Draws badges (`Session.setBadgeText`, `Session.setBadgeEnabled`).
+- **Tab Right-Click Context Menu Integration**: Extends Konsole's native tab context menu with settings for tab colors, pinning, grouping, custom icons, view splits, organizing, and **Send Tab To...** (sending the tab to any other open Konsole window or detaching into a new window).
 - **Secondary Terminal Support**: Writes standard ANSI OSC sequences (OSC 0, OSC 1, OSC 2, OSC 30, OSC 777, OSC 9) for foot, kitty, wezterm, alacritty, tmux, and xterm.
 - **Smart Focus-Aware Alerts**: Sends desktop notifications via `notify-send` and plays audio via `paplay`, `pw-play`, or `aplay`. If you are already looking at the tab, loud alerts can stay silent while the tab title updates.
 - **Task Recognition**: Classifies commands automatically from shell hooks (`zsh` and `bash`) without requiring command wrappers.
@@ -300,6 +301,23 @@ konsole-aware reset
 # Send a desktop alert with audio
 konsole-aware alert "Backup Done" "Data synchronization completed."
 ```
+
+### Tab Right-Click Context Menu
+
+When right-clicking on any tab in Konsole, `konsole-aware` extends the native context menu with direct options:
+
+- **📌 Anchor / Pin Tab** & **📍 Unpin Tab**: Lock tabs to the far left.
+- **🎨 Tab Color**: Set tab background directly to Emerald (`#10b981`), Amber (`#f59e0b`), Red (`#ef4444`), Purple (`#8b5cf6`), Blue (`#3b82f6`), Reset Color, or select a Custom Color via color picker.
+- **🏷️ Assign Group**: Place tabs into groups (Agents, Frontend, Backend, Data, Infrastructure, Custom, or Remove).
+- **📂 Project Context**: Set a permanent custom job name or reset back to the auto-detected Git root.
+- **🎯 Tab Icon**: Select from common development icons (🦀, 🐍, 📦, 🐹, ☕, 🐳, 🎨, ⚙️, 🧪, 🚀, 🔥, ⚡, 💎, 📜), pick a custom emoji, or revert to auto.
+- **🪟 Send Tab To...**:
+  - **➕ New Window (Detach)**: Detach the tab into its own independent window.
+  - **🪟 Window: [Title]**: Transfer the tab and its live process directly to any other open Konsole window!
+- **✂️ Split View**: Split horizontally (left/right), vertically (top/bottom), or equalize split view sizes.
+- **🧹 Organize Tabs**: Automatically sort tabs in the window by status, group, or name.
+
+The context menu hook is built into `~/.local/lib/libkonsole_aware_menu.so` and automatically loaded whenever Konsole is launched from `~/.local/bin/konsole` or desktop application shortcuts.
 
 ### Run as a Background Daemon (Optional)
 

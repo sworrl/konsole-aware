@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -841,6 +842,47 @@ def cmd_install(args: argparse.Namespace) -> int:
         else:
             print(f"✓ bash integration already present in {bashrc}")
 
+    # Build and install context menu hook
+    menu_hook_dir = repo_root / "menu_hook"
+    if (menu_hook_dir / "Makefile").exists():
+        try:
+            subprocess.run(["make", "-C", str(menu_hook_dir)], check=True, capture_output=True)
+            local_lib = home / ".local" / "lib"
+            local_lib.mkdir(parents=True, exist_ok=True)
+            target_so = local_lib / "libkonsole_aware_menu.so"
+            source_so = menu_hook_dir / "libkonsole_aware_menu.so"
+            if source_so.exists():
+                shutil.copy2(source_so, target_so)
+                print(f"✓ Installed context menu hook library: {target_so}")
+
+            # Konsole wrapper script
+            konsole_wrapper = local_bin / "konsole"
+            konsole_wrapper.write_text(
+                '#!/bin/bash\n'
+                f'HOOK_LIB="{target_so}"\n'
+                'if [ -f "$HOOK_LIB" ]; then\n'
+                '    export LD_PRELOAD="${HOOK_LIB}${LD_PRELOAD:+:$LD_PRELOAD}"\n'
+                'fi\n'
+                'exec /usr/bin/konsole "$@"\n',
+                encoding="utf-8"
+            )
+            konsole_wrapper.chmod(0o755)
+            print(f"✓ Installed konsole wrapper with menu hook: {konsole_wrapper}")
+
+            # Local desktop file override
+            apps_dir = home / ".local" / "share" / "applications"
+            apps_dir.mkdir(parents=True, exist_ok=True)
+            sys_desktop = Path("/usr/share/applications/org.kde.konsole.desktop")
+            local_desktop = apps_dir / "org.kde.konsole.desktop"
+            if sys_desktop.exists():
+                d_content = sys_desktop.read_text(encoding="utf-8")
+                d_content = d_content.replace("Exec=konsole", f"Exec={konsole_wrapper}")
+                local_desktop.write_text(d_content, encoding="utf-8")
+                subprocess.run(["update-desktop-database", str(apps_dir)], capture_output=True)
+                print(f"✓ Installed desktop application entry: {local_desktop}")
+        except Exception as e:
+            print(f"⚠ Note on context menu hook build: {e}")
+
     load_config()
     print("\n🎉 Installation completed successfully!")
     print("👉 Reload your shell: 'source ~/.zshrc' (or open a new Konsole tab)")
@@ -855,6 +897,21 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     if target_bin.is_symlink() or target_bin.exists():
         target_bin.unlink()
         print(f"✓ Removed binary: {target_bin}")
+
+    konsole_wrapper = home / ".local" / "bin" / "konsole"
+    if konsole_wrapper.exists():
+        konsole_wrapper.unlink()
+        print(f"✓ Removed konsole wrapper: {konsole_wrapper}")
+
+    local_so = home / ".local" / "lib" / "libkonsole_aware_menu.so"
+    if local_so.exists():
+        local_so.unlink()
+        print(f"✓ Removed context menu hook: {local_so}")
+
+    local_desktop = home / ".local" / "share" / "applications" / "org.kde.konsole.desktop"
+    if local_desktop.exists():
+        local_desktop.unlink()
+        print(f"✓ Removed desktop override: {local_desktop}")
 
     agy_hooks_file = home / ".gemini" / "config" / "hooks.json"
     if agy_hooks_file.exists():
