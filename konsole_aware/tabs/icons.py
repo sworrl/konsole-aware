@@ -172,18 +172,51 @@ class IconResolver:
 
         markers = set(self.get_project_file_icons().keys()) | {".git", ".konsole-icon", ".konsole-aware.json"}
 
-        # Search upwards for .git first as strongest indicator
+        # Never treat $HOME or anything above it as a project root: a stray
+        # package.json or Makefile there would swallow every directory below.
+        try:
+            home = Path.home().resolve()
+        except Exception:
+            home = None
+        candidates = []
         for parent in [cur] + list(cur.parents):
+            if home is not None and (parent == home or parent in home.parents):
+                break
+            candidates.append(parent)
+
+        # Search upwards for .git first as strongest indicator
+        for parent in candidates:
             if (parent / ".git").exists():
                 return parent
 
-        # Then search upwards for project marker files
-        for parent in [cur] + list(cur.parents):
-            for marker in markers:
-                if (parent / marker).exists():
-                    return parent
+        # Then search upwards for project marker files. A directory that holds several
+        # projects (e.g. ~/Documents/GitHub with a stray package.json) is a workspace
+        # container, not a project: stop there and use the directory below it.
+        for i, parent in enumerate(candidates):
+            if any((parent / marker).exists() for marker in markers):
+                if parent != cur and self._is_container(parent, markers):
+                    return candidates[i - 1] if i > 0 else cur
+                return parent
 
         return cur
+
+    @staticmethod
+    def _is_container(path: Path, markers: set, limit: int = 2) -> bool:
+        """True if at least `limit` immediate subdirectories look like projects."""
+        found = 0
+        try:
+            with os.scandir(path) as it:
+                for entry in it:
+                    if not entry.is_dir(follow_symlinks=False) or entry.name.startswith("."):
+                        continue
+                    sub = Path(entry.path)
+                    if (sub / ".git").exists() or any((sub / m).exists() for m in markers):
+                        found += 1
+                        if found >= limit:
+                            return True
+        except OSError:
+            return False
+        return False
 
     def _read_icon_file(self, dir_path: Path) -> Optional[str]:
         """Check for explicit icon definition files in a directory."""

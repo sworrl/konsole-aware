@@ -50,3 +50,17 @@ class TestTerminalAndState(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNotifierTimeout(unittest.TestCase):
+    def test_toasts_expire(self):
+        from unittest import mock
+        from konsole_aware.notify.notifier import Notifier
+        n = Notifier()
+        n.notify_send_bin = "/usr/bin/notify-send"
+        with mock.patch("konsole_aware.notify.notifier.subprocess.Popen") as popen:
+            n.notify("t", "m", urgency="critical", play_sound=False)
+        cmd = popen.call_args[0][0]
+        self.assertIn("-t", cmd)
+        self.assertEqual(cmd[cmd.index("-t") + 1], "4000")
+        self.assertEqual(cmd[cmd.index("-u") + 1], "normal")

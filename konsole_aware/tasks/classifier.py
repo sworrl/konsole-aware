@@ -1,8 +1,9 @@
 """Shell command classifier for task recognition and metadata extraction."""
 
 import os
-import shlex
 from typing import Any, Dict, List, Optional
+from konsole_aware.agents import identity as agent_identity
+from konsole_aware.agents.identity import detect_agent_from_argv
 from konsole_aware.config import load_config
 
 
@@ -58,20 +59,27 @@ class CommandClassifier:
 
         task_dots = self.config.get("task_dots", {})
 
-        # 1. Agents
+        # 1. Agents (exact process names, launchers like `npx claude-code`, versioned binaries)
         known_agents = self.config.get("known_agents", [])
-        if base_cmd in known_agents or any(a in base_cmd for a in ("agy", "claude", "aider")):
-            name = base_cmd
+        agent = detect_agent_from_argv(effective_tokens)
+        if agent or base_cmd in known_agents:
+            name = agent or base_cmd
             sub = args[0] if args and not args[0].startswith("-") else ""
             detail = f"{name} {sub}".strip()
+            ident = agent_identity.identity(name)
+            tab_mode = self.config.get("tab_color_mode", "agent")
+            color = ident.get("color") if tab_mode in ("agent", "agent_status") else colors.get("busy", "#f59e0b")
+            dot = ident.get("dot") or task_dots.get("agent", "🟣")
+            icon = ident.get("icon") or ("🤖" if name != "agy" else "🪐")
             return {
                 "category": "agent",
+                "agent": name,
                 "name": name,
                 "detail": detail,
-                "icon": "🤖" if name != "agy" else "⚡",
-                "task_dot": task_dots.get("agent", "🟣"),
-                "badge": name.upper()[:4],
-                "color": colors.get("busy", "#f59e0b"),
+                "icon": icon,
+                "task_dot": dot,
+                "badge": ident.get("label", name.upper())[:4],
+                "color": color,
                 "is_agent": True,
                 "is_transfer": False,
                 "is_build": False,
@@ -116,10 +124,16 @@ class CommandClassifier:
             }
 
         # 4. Tests
+        first = args[0] if args else ""
         is_test = (
-            base_cmd in ("pytest", "jest", "vitest", "ctest")
-            or (base_cmd in ("cargo", "npm", "pnpm", "yarn", "go", "mvn") and args and args[0] == "test")
-            or (args and "test" in args[0])
+            base_cmd in ("pytest", "py.test", "jest", "vitest", "ctest", "tox", "nox", "mocha", "phpunit", "rspec")
+            or (base_cmd in ("cargo", "npm", "pnpm", "yarn", "bun", "go", "mvn", "gradle", "dotnet", "mix", "deno")
+                and first in ("test", "t", "nextest"))
+            or (base_cmd in ("npm", "pnpm", "yarn", "bun") and first == "run" and len(args) > 1
+                and args[1].split(":")[0] in ("test", "tests", "e2e"))
+            or (base_cmd in ("make", "ninja") and first in ("test", "check", "tests"))
+            or (base_cmd.startswith("python") and len(args) > 1 and first == "-m"
+                and args[1] in ("pytest", "unittest", "tox", "nox"))
         )
         if is_test:
             sub = args[0] if args and not args[0].startswith("-") else ""

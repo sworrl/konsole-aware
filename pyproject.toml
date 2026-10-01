@@ -19,3 +19,9 @@ classifiers = [
 
 [project.scripts]
 konsole-aware = "konsole_aware.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["konsole_aware*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

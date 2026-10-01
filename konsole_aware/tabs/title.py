@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from konsole_aware.agents import identity as agent_identity
 from konsole_aware.config import load_config
 from konsole_aware.state.manager import StateManager
 from konsole_aware.tabs.groups import TabGroupManager
@@ -30,6 +31,10 @@ STATUS_ICONS = {
     "error": "❌",
     "waiting": "❓",
     "idle": "💤",
+    "compacting": "🗜️",
+    "blocked": "🛡️",
+    "limited": "⌛",
+    "subagents": "🤖",
 }
 
 
@@ -79,6 +84,8 @@ class TitleComposer:
                 return Path(cwd or ".").resolve().name
             except Exception:
                 return "term"
+        if source == "git":
+            return find_project_name(cwd)
 
         try:
             cur = Path(cwd or ".").resolve()
@@ -119,17 +126,27 @@ class TitleComposer:
         detail: str = "",
         cwd: Optional[str] = None,
         icon: Optional[str] = None,
+        agent: Optional[str] = None,
+        mode: Optional[str] = None,
     ) -> str:
         """
-        Compose full tab title:
-        Example: [🐍 konsole_aware] 🟣 🧠 agy: thinking...
-        Example: [🧪 konsole_aware/tests] 🟣 🛠️ agy: cmd(...)
-        Example: [🟠 rsync] ⏳ rsync -> backup
-        Example: [🟡 cargo] ✅ cargo build (42s)
+        Compose full tab title. The agent identity comes first so it stays visible
+        when Konsole elides long tab titles:
+        Example: ✳️ CLAUDE [🐍 konsole_aware] 🧠 thinking...
+        Example: 🪐 AGY ⚡ BYPASS [🧪 konsole_aware/tests] 🛠️ cmd(cargo test)
+        Example: 👤 USER [🦀 indexer] 🟡 ✅ cargo build (42s)
         """
         always_show_job = self.config.get("always_show_job", True)
         show_task_dot = self.config.get("show_task_dot", True)
         enable_icons = self.config.get("enable_project_icons", True)
+        show_identity = self.config.get("show_agent_identity", True)
+        show_mode = self.config.get("show_agent_mode", True)
+
+        sess = self.state_mgr.get_session(session_key) if session_key else {}
+        if agent is None:
+            agent = sess.get("agent") or agent_identity.USER
+        if mode is None and agent != agent_identity.USER:
+            mode = sess.get("agent_mode")
 
         resolved_job = self.get_job_name(session_key=session_key, cwd=cwd, explicit_job=job_name)
         resolved_icon = (
@@ -137,7 +154,6 @@ class TitleComposer:
             if enable_icons
             else ""
         )
-        task_dot = self.get_task_dot(task_category) if show_task_dot else ""
         status_icon = self.get_status_icon(status)
 
         parts = []
@@ -146,7 +162,15 @@ class TitleComposer:
         if session_key and self.group_mgr.is_anchored(session_key):
             parts.append("📌")
 
-        # 2. Group tag if assigned
+        # 2. Agent identity (✳️ CLAUDE / 🪐 AGY / 👤 USER) and its mode
+        if show_identity:
+            parts.append(agent_identity.identity_tag(agent))
+        if show_mode and agent != agent_identity.USER:
+            tag = agent_identity.mode_tag(mode)
+            if tag:
+                parts.append(tag)
+
+        # 3. Group tag if assigned
         if session_key:
             grp = self.group_mgr.get_tab_group(session_key)
             if grp:
@@ -154,7 +178,7 @@ class TitleComposer:
                 g_name = grp["name"].capitalize()
                 parts.append(f"[{g_icon} {g_name}]".strip() if g_icon else f"[{g_name}]")
 
-        # 3. Permanent Job / Project Context with Icon
+        # 4. Permanent Job / Project Context with Icon
         if always_show_job and (resolved_job or resolved_icon):
             if resolved_icon and resolved_job:
                 parts.append(f"[{resolved_icon} {resolved_job}]")
@@ -163,11 +187,15 @@ class TitleComposer:
             elif resolved_icon:
                 parts.append(f"[{resolved_icon}]")
 
-        # 4. Task Colored Dot
-        if task_dot:
-            parts.append(task_dot)
+        # 5. Task colored dot: distinct agent dot (🟠 Claude, 🔵 AGY, etc.) or category dot
+        is_agent_tab = show_identity and agent != agent_identity.USER
+        if show_task_dot and task_category != "idle":
+            if is_agent_tab:
+                parts.append(agent_identity.agent_dot(agent))
+            else:
+                parts.append(self.get_task_dot(task_category))
 
-        # 5. Status icon + detail
+        # 6. Status icon + detail
         if detail:
             # If detail already has status icon (e.g. '🧠 ...' or '✅ ...'), don't duplicate
             if any(detail.startswith(ic) for ic in STATUS_ICONS.values()):
@@ -177,4 +205,4 @@ class TitleComposer:
         else:
             parts.append(status_icon)
 
-        return " ".join(parts).strip()
+        return " ".join(p for p in parts if p).strip()

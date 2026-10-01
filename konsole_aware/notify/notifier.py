@@ -50,14 +50,23 @@ class Notifier:
             if is_error
             else self.config.get("alert_sound_file")
         )
+        if not play_sound or not self.config.get("alert_sound", True):
+            sound_file = None
 
         if self.notify_send_bin:
+            if urgency == "critical" and not self.config.get("sticky_alerts", False):
+                urgency = "normal"
+            timeout_s = self.config.get("notification_timeout_seconds", 4)
             cmd = [
                 self.notify_send_bin,
                 "-a", "Konsole Aware",
                 "-i", icon,
                 "-u", urgency,
+                # Transient: pops up and fades without piling up in the notification history.
+                "--hint=boolean:transient:true",
             ]
+            if urgency != "critical" and timeout_s and float(timeout_s) > 0:
+                cmd.extend(["-t", str(int(float(timeout_s) * 1000))])
             if sound_file and os.path.exists(sound_file):
                 cmd.append(f"--hint=string:sound-file:{sound_file}")
 

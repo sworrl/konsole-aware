@@ -6,7 +6,10 @@ Tab title, taskbar, color, and alert awareness for KDE Konsole and Linux termina
 
 ## Features
 
-- **Agent Lifecycle Integration**: Hooks directly into Antigravity (`agy`) and Claude Code (`claude`). Displays exact states such as `🧠 agy: thinking...`, `🛠️ agy: cmd(cargo test)`, `📝 agy: edit(main.py)`, `❓ agy: question`, and `✅ [Ready] agy`.
+- **Agent Identity on Every Tab**: Each tab says who is in it: `✳️ CLAUDE`, `🪐 AGY` (also `♊ GEMINI`, `🧩 CODEX`, `🤝 AIDER`, ...) or `👤 USER` when no agent is running. The identity comes first in the title, so it survives Konsole eliding long tab titles, and is repeated in the top-right badge (`✳️ CLAUDE · THINK`).
+- **Agent Lifecycle Integration**: Hooks into Claude Code (`claude`) and Antigravity (`agy`) and shows exact states: thinking, tool use (`Bash(cargo test)`, `edit(main.py)`), waiting for permission, questions, plan ready, subagents, compaction, done, failed, and back to `👤 USER` when the agent exits. The hooks are purely observational: they never approve or block tool calls.
+- **Agent Modes**: Claude Code permission modes (`📋 PLAN`, `✏️ EDITS`, `🤖 AUTO`, `🔕 DONT-ASK`, `⚡ BYPASS`; default shows nothing) and agy modes (`--mode plan|accept-edits`, `--dangerously-skip-permissions`) appear next to the identity.
+- **Project Snapping**: When `claude` and `agy` run in the same project, their tabs are snapped side by side automatically (and `konsole-aware snap` tidies whole windows: one cluster per project, agents first).
 - **Permanent Job / Project Context**: Tab titles permanently display the active project or directory context (`[{job_name}]`) resolved from the Git repository root or directory, overridable with `konsole-aware set-job`.
 - **Dual Simultaneous Color-Coding**:
   - Task category is displayed as a colored dot in the tab title (`🟣` Agent, `🟠` Transfer, `🟡` Build, `🟢` Test, `🔵` VCS, `🟤` Download).
@@ -37,12 +40,13 @@ Or invoke the CLI installer:
 python3 bin/konsole-aware install
 ```
 
-The installer performs five steps:
+The installer performs these steps (re-running it is safe):
 1. Links `bin/konsole-aware` to `~/.local/bin/konsole-aware`.
-2. Registers lifecycle hooks in `~/.gemini/config/hooks.json` for Antigravity (`agy`).
-3. Registers hooks in `~/.claude/settings.json` for Claude Code (`claude`).
+2. Registers a `konsole-aware` hook in `~/.gemini/config/hooks.json` for Antigravity (`agy`).
+3. Merges hooks for every Claude Code lifecycle event into `~/.claude/settings.json`, keeping your existing hooks (a `.konsole-aware.bak` backup is written first).
 4. Sources `shell/konsole-aware.zsh` in `~/.zshrc`.
 5. Sources `shell/konsole-aware.bash` in `~/.bashrc`.
+6. Builds the tab context-menu hook and a `~/.local/bin/konsole` wrapper that loads it (skip with `install --no-menu`).
 
 Reload your shell or open a new terminal tab:
 
@@ -58,16 +62,16 @@ source ~/.zshrc
 konsole-aware list
 ```
 
-Example output:
+Example output (tabs in visual order, with the agent running in each):
 ```text
-  🔍 Konsole Aware - Active Tab Status
-  ──────────────────────────────────────────────────────────────────────────────────────────────
-  WIN  TAB   ACT  PIN  GROUP          TITLE                      STATUS               DURATION  
-  ──────────────────────────────────────────────────────────────────────────────────────────────
-  1    1     ○    -    -              Katamari                   ⚡ agy                14s       
-  1    7     ●    -    [transfers]    📥 [rsync] /data           📥 rsync             1m 24s    
-  2    9     ●    📌   [agents]       ✅ [Ready] agy             ✅ agy               12s       
-  ──────────────────────────────────────────────────────────────────────────────────────────────
+  🔍 Konsole Aware - Tabs by Window (visual order)
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────
+  WIN  TAB  ACT PIN AGENT              PROJECT              STATUS                       DURATION  GROUP
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────
+  2    13   ●   -   ✳️ CLAUDE ⚡ BYPASS konsole_aware        tool: Bash(pytest -q)        1m 12s    -
+  2    9    ○   -   🪐 AGY ⚡ BYPASS    konsole_aware        done: ready in 41s           41s       -
+  2    7    ○   -   👤 USER            konsole_aware        Idle                         -         -
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────
 ```
 
 Output raw JSON:
@@ -75,11 +79,69 @@ Output raw JSON:
 konsole-aware list --json
 ```
 
+### Agent Identity, Modes and States
+
+Every title starts with who is in the tab, then the mode (if any), the project, and the state:
+
+```text
+✳️ CLAUDE [🐍 konsole_aware] 🧠 thinking…
+✳️ CLAUDE 📋 PLAN [🐍 konsole_aware] ❓ plan ready for review
+🪐 AGY ⚡ BYPASS [🐍 konsole_aware] 🛠️ cmd(cargo test)
+👤 USER [🐍 konsole_aware] 🟡 ⏳ cargo build
+👤 USER [🐍 konsole_aware] 💤
+```
+
+Claude Code events handled: `SessionStart` (startup/resume/clear/compact), `UserPromptSubmit`, `PreToolUse`
+(incl. `AskUserQuestion` and `ExitPlanMode`), `PermissionRequest`, `PermissionDenied`, `PostToolUse`,
+`PostToolUseFailure` (incl. interrupts), `PostModelSwitch`, `Notification` (`permission_prompt`, `idle_prompt`, `elicitation_dialog`),
+`Elicitation`/`ElicitationResult`, `SubagentStart`/`SubagentStop`, `PreCompact`/`PostCompact`, `Stop`,
+`StopFailure`, and `SessionEnd`. Antigravity events handled: `PreInvocation`, `PreToolUse` (incl. `ask_question`),
+`PostToolUse`, and `Stop` (with `terminationReason`).
+
+**Safeguard blocks.** When Claude's safeguards flag a request (often a false positive on legitimate security or
+systems work), the tab says so instead of looking finished or generically failed:
+
+- Hard block (`API Error: …'s safeguards flagged this message`): `✳️ CLAUDE [proj] 🛡️ blocked by safeguards [cyber] · rephrase or /model`, pink tab, `BLOCKED` badge, and a desktop alert.
+- Automatic model switch after a flag ("Switch models when a message is flagged"): `🛡️ flagged [cyber]: Fable 5.1 → Opus 4.8` while it keeps working, and `ready in 2m 3s · 🛡️ on Opus 4.8` when done.
+- Model switches for other reasons (overload, unavailable) show as `switched: A → B` without the shield.
+
+Detection uses the `StopFailure`/`Stop`/`PostModelSwitch` hook payloads plus the current turn's transcript entries
+(`stop_reason: "refusal"`, `stop_details.category`), so a reply that merely talks about safeguards is not mistaken for a block.
+
+**Waiting means you can answer now.** `❓ waiting` (purple) only appears while a question, plan approval, or
+permission prompt is open. A finished turn stays `✅ ready` even if Claude's last message asked you something.
+
+**Turn ends no hook reports.** Pressing Esc in Claude Code fires no `Stop` hook, and agy has no exit hook. A small
+per-tab watcher (started at each turn, exits when it ends) and every `list`/`watch`/`daemon` scan close such turns:
+Claude's transcript shows `[Request interrupted by user…]` (→ `interrupted`) or a `turn_duration` record
+(→ `ready in …`), and an agent process that exited returns the tab to `👤 USER`. Disable with `"agent_watchdog": false`.
+
+**Usage limits.** "You've hit your session/weekly limit · resets …" and "You've reached your <model> limit" show as
+`⌛ weekly limit · resets Oct 1, 2am` on an orange tab with a `LIMIT` badge.
+
+Tab colors use `"tab_color_mode": "agent"` by default so each agent's tab is immediately glanceable and distinguishable (Claude terracotta `#d97757` with `🟠`, AGY electric blue `#4285f4` with `🔵`, Gemini purple `#8e75ff` with `🟣`, Codex green `#10a37f` with `🟢`). Urgent attention states override the color (purple for user input/permission, red for failure, orange for usage limit, pink for provider safeguard blocks). Set `"tab_color_mode": "status"` if you prefer uniform state-based colors across all agents, or `"agent_status"` to keep agent colors during execution and transition to emerald green when done.
+
+### Snapping Agent Tabs Together
+
+When an agent starts in the active tab, that tab moves next to the other tabs of the same project in its window
+(agents first, in `agent_order`: claude, then agy, ...). To tidy whole windows:
+
+```bash
+konsole-aware snap              # every window
+konsole-aware snap --window 2   # one window
+konsole-aware snap --dry-run    # show the resulting order without moving anything
+konsole-aware organize --by project   # same as snap
+```
+
+Projects are the Git root (or the nearest project marker below a workspace folder that holds many projects).
+Konsole cannot move tabs between windows over D-Bus; `snap` reports projects split across windows, and the tab
+menu's **Send Tab To...** moves them. Disable automatic snapping with `"auto_snap_agents": false`.
+
 ### Permanent Job and Project Context
 
 Tab titles permanently display the repository or directory context with auto-detected or assigned icons:
-`[🐍 konsole_aware] 🟣 🧠 agy: thinking...`
-`[🧪 konsole_aware/tests] 🟣 🛠️ agy: cmd(...)`
+`✳️ CLAUDE [🐍 konsole_aware] 🧠 thinking…`
+`🪐 AGY [🧪 konsole_aware/tests] 🛠️ cmd(...)`
 
 Override the detected project name with a permanent custom job name and optional icon:
 
@@ -227,6 +289,9 @@ Reorder tabs across windows automatically:
 # Organize tabs: Anchored tabs first, then Busy tabs, then Done, then Idle
 konsole-aware organize --by status
 
+# Same-project tabs together, agent tabs (claude, agy, ...) side by side
+konsole-aware organize --by project
+
 # Group all tabs of the same category or project together
 konsole-aware organize --by group
 
@@ -315,9 +380,10 @@ When right-clicking on any tab in Konsole, `konsole-aware` extends the native co
   - **➕ New Window (Detach)**: Detach the tab into its own independent window.
   - **🪟 Window: [Title]**: Transfer the tab and its live process directly to any other open Konsole window!
 - **✂️ Split View**: Split horizontally (left/right), vertically (top/bottom), or equalize split view sizes.
-- **🧹 Organize Tabs**: Automatically sort tabs in the window by status, group, or name.
+- **🧲 Snap Project Tabs Together**: Cluster same-project tabs with agent tabs side by side.
+- **🧹 Organize Tabs**: Automatically sort tabs in the window by status, group, name, or project.
 
-The context menu hook is built into `~/.local/lib/libkonsole_aware_menu.so` and automatically loaded whenever Konsole is launched from `~/.local/bin/konsole` or desktop application shortcuts.
+The context menu hook is built into `~/.local/lib/libkonsole_aware_menu.so` and loaded whenever Konsole is launched from `~/.local/bin/konsole` or the desktop application shortcut (quit and restart Konsole after installing). It acts on the tab you right-clicked, not the active tab, and removes itself from `LD_PRELOAD` so it is not loaded into the shells and programs running in your tabs.
 
 ### Run as a Background Daemon (Optional)
 
@@ -357,7 +423,14 @@ Settings are stored at `~/.config/konsole-aware/config.json`. The file is create
     "idle": "#3b82f6",
     "reset": "#000000"
   },
-  "known_agents": ["agy", "claude", "aider", "copilot", "cursor", "gemini", "openhands"],
+  "show_agent_identity": true,
+  "show_agent_mode": true,
+  "agent_identities": {},
+  "agent_order": ["claude", "agy", "gemini", "codex", "aider", "copilot", "cursor", "opencode"],
+  "auto_snap_agents": true,
+  "snap_include_user_sessions": true,
+  "tab_color_mode": "agent",
+  "known_agents": ["agy", "claude", "aider", "copilot", "cursor-agent", "gemini", "codex", "opencode", "openhands"],
   "known_transfers": ["rsync", "scp", "sftp", "rclone", "ftp", "bcp"],
   "known_downloads": ["curl", "wget", "aria2c", "axel", "yt-dlp"],
   "known_builds": ["cargo", "make", "ninja", "cmake", "go", "mvn", "gradle", "npm", "yarn", "pnpm", "rustc", "gcc", "clang", "g++"]
@@ -369,10 +442,15 @@ Settings are stored at `~/.config/konsole-aware/config.json`. The file is create
 - `min_duration_seconds`: Commands shorter than this number of seconds will not trigger desktop notifications or audio bells.
 - `alert_only_unfocused`: When set to `true`, desktop alerts and sounds only fire if the tab is not the currently active tab in its window.
 - `enable_tab_colors`: Enables or disables Konsole tab background highlighting.
+- `agent_identities`: Override an agent's tag, e.g. `{"claude": {"icon": "🟠", "label": "CC"}}`, or add a new agent: `{"myagent": {"icon": "🦾", "label": "MINE", "procs": ["myagent"]}}`.
+- `agent_order`: Order of agent tabs inside a snapped project cluster.
+- `auto_snap_agents`: Snap a tab next to its project's other tabs when an agent starts in it.
+- `snap_include_user_sessions`: Also pull plain `👤 USER` shells of the same project into the cluster.
 
+State lives in `$XDG_RUNTIME_DIR/konsole-aware/` (private to your user). Hook errors never reach the agent; they are logged to `errors.log` there.
 ## Uninstallation
 
-To remove hooks, aliases, and shell sources:
+To remove hooks, aliases, and shell sources (only konsole-aware's own hook entries are removed; your other Claude Code and agy hooks are kept):
 
 ```bash
 ./uninstall.sh
@@ -380,8 +458,8 @@ To remove hooks, aliases, and shell sources:
 
 ## Tests
 
-Run the test suite with Python's built-in test runner:
+The suite is hermetic (temporary config/state, no D-Bus, no writes to your terminal):
 
 ```bash
-python3 -m unittest discover tests
+python3 -m pytest -q
 ```

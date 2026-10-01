@@ -1,157 +1,107 @@
-"""Antigravity (agy) agent lifecycle hook handler."""
+"""Antigravity (agy) agent lifecycle hook handler.
 
-import os
+agy hook contract (from the CLI's built-in hooks.json documentation): payloads are
+camelCase JSON with common fields conversationId, workspacePaths, transcriptPath,
+modelName. Events: PreInvocation (before each model call), PreToolUse (toolCall.name /
+toolCall.args), PostToolUse (error present if the tool failed), PostInvocation, Stop
+(terminationReason, error, fullyIdle). Hooks run with their working directory set to
+the directory holding hooks.json, so the project comes from workspacePaths.
+
+The hook is purely observational. It returns `{}` for every event: in particular it
+never returns a PreToolUse "decision" ("allow" would silently auto-approve every tool
+call and bypass agy's permission prompts) and never asks a Stop to continue.
+"""
+
 from pathlib import Path
-from typing import Any, Dict
-from konsole_aware.agents.base import BaseAgentHandler
-from konsole_aware.config import load_config
-from konsole_aware.terminal import get_terminal
-from konsole_aware.notify.notifier import Notifier
-from konsole_aware.state.manager import StateManager
-from konsole_aware.tabs.title import TitleComposer
+from typing import Any, Dict, Optional
+
+from konsole_aware.agents.base import BaseAgentHandler, short
+
+STOP_REASONS = {
+    "model_stop": None,
+    "max_steps_exceeded": "max steps reached",
+    "error": "error",
+}
 
 
 class AgyHandler(BaseAgentHandler):
     """Integrates with Antigravity lifecycle hooks."""
 
-    def __init__(self):
-        self.config = load_config()
-        self.notifier = Notifier()
-        self.state_mgr = StateManager()
-        self.composer = TitleComposer()
+    agent_name = "agy"
+    display_name = "Antigravity"
 
     def handle_event(self, event_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        term = get_terminal()
-        session_id = term.get_session_id()
-        colors = self.config.get("colors", {})
-        emojis = self.config.get("emojis", {})
+        event = event_name.replace("_", "").lower()
+        workspace_paths = payload.get("workspacePaths") or []
+        cwd: Optional[str] = workspace_paths[0] if workspace_paths else None
+        if not cwd:
+            cwd = getattr(self.term, "get_cwd", lambda: None)()
+        project = Path(cwd).name if cwd else "workspace"
 
-        # Extract workspace context
-        workspace_paths = payload.get("workspacePaths", [])
-        workspace_dir = workspace_paths[0] if workspace_paths else None
-        workspace_name = (
-            Path(workspace_dir).name
-            if workspace_dir
-            else Path.cwd().name
-        )
+        before = self.attach()
+        if before.get("nested"):
+            return {}
+        prev = before.get("agent_status") or before.get("status")
+        if before.get("new_agent"):
+            self.maybe_auto_snap()
 
-        response: Dict[str, Any] = {}
+        if event == "preinvocation":
+            self.begin_turn_if_idle(prev)
+            self.start_watchdog()
+            self.render("thinking", "thinking…", cwd=cwd)
 
-        if event_name in ("PreInvocation", "pre_invocation"):
-            # Model is thinking / planning
-            title = self.composer.compose(
-                session_key=session_id,
-                task_category="agent",
-                status="thinking",
-                detail="agy: thinking...",
-                cwd=workspace_dir,
-            )
-            term.set_title(title, role=0)
-            term.set_tab_color(colors.get("busy", "#f59e0b"))
-            term.set_badge("THINK", enabled=True)
-            self.state_mgr.start_task(
-                session_id,
-                task_name="agy",
-                task_type="agent",
-                detail="thinking",
-            )
-            response = {"injectSteps": []}
-
-        elif event_name in ("PreToolUse", "pre_tool_use"):
-            tool_call = payload.get("toolCall", {})
-            name = tool_call.get("name", "tool")
-            args = tool_call.get("args", {})
-
-            # Clean and format tool description
-            detail = self._format_tool_detail(name, args)
-            status = "waiting" if name == "ask_question" else "tool"
-            title = self.composer.compose(
-                session_key=session_id,
-                task_category="agent",
-                status=status,
-                detail=f"agy: {detail}",
-                cwd=workspace_dir,
-            )
-            term.set_title(title, role=0)
-            term.set_tab_color(colors.get("busy", "#f59e0b"))
-
+        elif event == "pretooluse":
+            tool_call = payload.get("toolCall") or {}
+            name = tool_call.get("name") or "tool"
+            args = tool_call.get("args") or {}
+            self.begin_turn_if_idle(prev)
             if name == "ask_question":
-                # Special high-priority state: Agent is waiting for user answer!
-                term.set_tab_color(colors.get("waiting", "#8b5cf6"))
-                term.set_badge("WAIT", enabled=True)
-                sess_num = getattr(term, "get_session_num", lambda: None)()
-                sess_label = f"Tab {sess_num}" if sess_num is not None else "Terminal"
-                self.notifier.notify(
-                    title="Antigravity Needs Input",
-                    message=f"Antigravity is asking a question in {sess_label} ({workspace_name})",
-                    urgency="critical",
-                    is_error=False,
-                    play_sound=True,
-                )
+                self.render("waiting", "question", cwd=cwd)
+                self.alert("Antigravity Needs Input",
+                           f"Antigravity is asking a question in {self.session_label()} ({project})",
+                           urgency="critical", dedupe_key="question")
             else:
-                term.set_badge("TOOL", enabled=True)
+                self.render("tool", self.format_tool_detail(name, args), cwd=cwd, last_tool=name)
 
-            self.state_mgr.start_task(
-                session_key=session_id,
-                task_name="agy",
-                task_type="agent",
-                detail=f"{name}: {detail}",
-            )
-            response = {"decision": "allow"}
+        elif event == "posttooluse":
+            if payload.get("error"):
+                last = self.state_mgr.get_session(self.session_key).get("last_tool") or "tool"
+                self.render("thinking", f"{last} failed", cwd=cwd, icon_status="error")
+            else:
+                self.render("thinking", "thinking…", cwd=cwd)
 
-        elif event_name in ("PostToolUse", "post_tool_use"):
-            error = payload.get("error")
-            if error:
-                term.set_tab_color(colors.get("error", "#ef4444"))
-                term.set_badge("ERR", enabled=True)
-            response = {}
+        elif event == "postinvocation":
+            pass
 
-        elif event_name in ("Stop", "stop"):
-            # Turn or run has completed
-            finished_state = self.state_mgr.finish_task(session_key=session_id, exit_code=0, status="done")
-            duration_str = ""
-            if "duration" in finished_state:
-                dur = int(finished_state["duration"])
-                mins, secs = divmod(dur, 60)
-                duration_str = f" in {mins}m {secs}s" if mins else f" in {secs}s"
+        elif event == "stop":
+            dur = self.turn_duration()
+            reason = payload.get("terminationReason") or "model_stop"
+            error = payload.get("error") or ""
+            failed = bool(error) or reason in ("error", "max_steps_exceeded")
+            if failed:
+                why = short(error or STOP_REASONS.get(reason) or reason, 32)
+                self.state_mgr.finish_task(self.session_key, exit_code=1, status="error")
+                self.render("error", f"stopped: {why}", cwd=cwd)
+                self.alert("Antigravity Stopped",
+                           f"Antigravity stopped ({why}) in {self.session_label()} ({project})",
+                           urgency="critical", is_error=True)
+            else:
+                self.state_mgr.finish_task(self.session_key, exit_code=0, status="done")
+                bg = "" if payload.get("fullyIdle", True) else " · bg tasks running"
+                self.render("done", (f"ready in {dur}" if dur else "ready") + bg, cwd=cwd)
+                self.alert("Antigravity Complete",
+                           f"Antigravity finished{' in ' + dur if dur else ''} in {self.session_label()} ({project})")
 
-            title = self.composer.compose(
-                session_key=session_id,
-                task_category="agent",
-                status="done",
-                detail=f"agy: ready{duration_str}",
-                cwd=workspace_dir,
-            )
-            term.set_title(title, role=0)
-            term.set_tab_color(colors.get("done", "#10b981"))
-            term.set_badge("DONE", enabled=True)
+        return {}
 
-            # Check focus before sending desktop notification & audio
-            unfocused_only = self.config.get("alert_only_unfocused", True)
-            is_focused = term.is_focused()
-
-            if not unfocused_only or not is_focused:
-                sess_num = getattr(term, "get_session_num", lambda: None)()
-                sess_label = f"Tab {sess_num}" if sess_num is not None else "Terminal"
-                self.notifier.notify(
-                    title="Antigravity Complete",
-                    message=f"Antigravity finished its task{duration_str} in {sess_label} ({workspace_name})",
-                    urgency="normal",
-                    is_error=False,
-                    play_sound=True,
-                )
-
-            response = {}
-
-        return response
-
-    def _format_tool_detail(self, name: str, args: Dict[str, Any]) -> str:
+    def format_tool_detail(self, name: str, args: Dict[str, Any]) -> str:
         """Format tool call arguments into a concise, readable summary."""
+        if not isinstance(args, dict):
+            args = {}
         if name == "run_command":
-            cmd = args.get("CommandLine", "")
-            return f"cmd({cmd[:24]}...)" if len(cmd) > 24 else f"cmd({cmd})"
+            return f"cmd({short(args.get('CommandLine', ''), 24)})"
 
-        if name in ("write_to_file", "replace_file_content"):
+        if name in ("write_to_file", "replace_file_content", "multi_replace_file_content"):
             target = args.get("TargetFile", "")
             return f"edit({Path(target).name})" if target else name
 
@@ -161,19 +111,22 @@ class AgyHandler(BaseAgentHandler):
 
         if name == "search_web":
             q = args.get("query", "")
-            return f"web({q[:20]})" if q else "web search"
+            return f"web({short(q, 20)})" if q else "web search"
 
         if name == "read_url_content":
             url = args.get("Url", "")
             domain = url.split("/")[2] if "://" in url else url
-            return f"url({domain[:20]})"
+            return f"url({short(domain, 20)})"
 
         if name == "invoke_subagent":
             subagents = args.get("Subagents", [])
-            roles = [s.get("Role", "subagent") for s in subagents]
+            roles = [s.get("Role", "subagent") for s in subagents if isinstance(s, dict)]
             return f"agents({', '.join(roles[:2])})" if roles else "subagents"
 
         if name == "ask_question":
             return "question"
 
-        return name[:20]
+        return short(name, 20)
+
+    # Backwards-compatible alias used by older tests/scripts.
+    _format_tool_detail = format_tool_detail

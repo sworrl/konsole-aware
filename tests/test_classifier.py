@@ -13,10 +13,17 @@ class TestCommandClassifier(unittest.TestCase):
         self.assertEqual(res["category"], "agent")
         self.assertEqual(res["name"], "agy")
         self.assertTrue(res["is_agent"])
+        self.assertEqual(res["color"], "#4285f4")
+        self.assertEqual(res["task_dot"], "🔵")
+        self.assertEqual(res["icon"], "🪐")
 
         res2 = self.clf.classify("claude --agent reviewer")
         self.assertEqual(res2["category"], "agent")
         self.assertEqual(res2["name"], "claude")
+        self.assertEqual(res2["color"], "#d97757")
+        self.assertEqual(res2["task_dot"], "🟠")
+        self.assertEqual(res2["icon"], "✳️")
+        self.assertNotEqual(res["color"], res2["color"])
 
     def test_classify_transfer(self):
         res = self.clf.classify("rsync -avz /source/ user@remote:/backup")

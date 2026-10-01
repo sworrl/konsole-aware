@@ -1,6 +1,7 @@
 """Color utilities, ANSI TrueColor formatting, and Unicode color tags."""
 
 import re
+import unicodedata
 from typing import Optional, Tuple
 
 # Mapping of common color names to 24-bit RGB hex
@@ -146,9 +147,34 @@ def strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
 
 
+def display_width(text: str) -> int:
+    """Terminal column width of text (emoji and CJK take two columns, combining marks none)."""
+    width = 0
+    chars = strip_ansi(text)
+    for i, ch in enumerate(chars):
+        if unicodedata.combining(ch) or ch in ("\u200d", "\ufe0e", "\ufe0f"):
+            continue
+        emoji_presentation = i + 1 < len(chars) and chars[i + 1] == "\ufe0f"
+        width += 2 if emoji_presentation or unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return width
+
+
+def truncate_display(text: str, width: int) -> str:
+    """Truncate plain text to a display width, adding an ellipsis when cut."""
+    if display_width(text) <= width:
+        return text
+    out, used = "", 0
+    for ch in text:
+        w = display_width(ch)
+        if used + w > width - 1:
+            break
+        out += ch
+        used += w
+    return out + "…"
+
+
 def pad_ansi(text: str, width: int) -> str:
     """Pad a string containing ANSI escape codes based on its visible width."""
-    visible = strip_ansi(text)
-    pad = max(0, width - len(visible))
+    pad = max(0, width - display_width(text))
     return text + (" " * pad)
 
