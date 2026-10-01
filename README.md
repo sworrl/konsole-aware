@@ -116,8 +116,25 @@ per-tab watcher (started at each turn, exits when it ends) and every `list`/`wat
 Claude's transcript shows `[Request interrupted by user…]` (→ `interrupted`) or a `turn_duration` record
 (→ `ready in …`), and an agent process that exited returns the tab to `👤 USER`. Disable with `"agent_watchdog": false`.
 
-**Usage limits.** "You've hit your session/weekly limit · resets …" and "You've reached your <model> limit" show as
-`⌛ weekly limit · resets Oct 1, 2am` on an orange tab with a `LIMIT` badge.
+### Package Managers and System Updates
+
+Package managers (`apt`, `apt-get`, `nala`, `pacman`, `dnf`, `zypper`, `snap`, `flatpak`, `brew`) and system updates (including `sudo apt-get update`, `sudo apt full-upgrade`, `pacman -Syu`) are automatically classified with dedicated action icons, badges, and progress tracking:
+
+- **Repository update** (`sudo apt-get update`, `pacman -Sy`): `[proj] 🔄 apt update`, `UPDT` badge, and sky blue tab color.
+- **System upgrade** (`sudo apt full-upgrade`, `pacman -Syu`): `[proj] ⬆️ apt full-upgrade`, `UPGR` badge.
+- **Package install** (`sudo apt install ripgrep`): `[proj] 📥 apt install ripgrep`, `INST` badge.
+- **Removal** (`sudo apt autoremove`): `[proj] 🗑️ apt autoremove`, `RM` badge.
+
+Sudo options (such as `sudo -E`, `sudo -u`, or environment variables) are parsed transparently so the command target and action are always recognized.
+
+### Glanceable Titles with Many Tabs
+
+When 10 or more tabs are open, Konsole shrinks each tab to 12-16 visible characters. To prevent tabs from degrading into identical `... ready in Xs` strings:
+
+- Redundant filler is removed: finished turns display `✅ ready (55s)` or `✅ 55s` instead of repeating `ready in ...`.
+- User tabs running active commands omit the redundant `👤 USER` prefix so the project and command remain visible.
+- Overlong project names are constrained by `"max_job_length": 16` so they do not crowd out status icons.
+- Konsole's tab bar hook sets `Qt::ElideRight` and enables tab scroll buttons so project and agent identities at the front of the tab are never truncated.
 
 Tab colors use `"tab_color_mode": "agent"` by default so each agent's tab is immediately glanceable and distinguishable (Claude terracotta `#d97757` with `🟠`, AGY electric blue `#4285f4` with `🔵`, Gemini purple `#8e75ff` with `🟣`, Codex green `#10a37f` with `🟢`). Urgent attention states override the color (purple for user input/permission, red for failure, orange for usage limit, pink for provider safeguard blocks). Set `"tab_color_mode": "status"` if you prefer uniform state-based colors across all agents, or `"agent_status"` to keep agent colors during execution and transition to emerald green when done.
 

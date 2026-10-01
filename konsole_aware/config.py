@@ -55,6 +55,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "git": "🐙",
         "container": "🐳",
         "archive": "📦",
+        "package": "📦",
         "generic": "⏳",
     },
     "always_show_job": True,
@@ -78,6 +79,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "agent_watchdog": True,          # End a turn when the agent is interrupted (Esc) or exits without a hook
     "snap_include_user_sessions": True,  # Pull plain shells of the same project into the cluster too
     "tab_color_mode": "agent",      # "agent": distinct brand color per agent identity; "status": state color; "agent_status": agent color while running, status color on exit
+    "compact_tab_titles": True,      # Shorter, glanceable titles when many tabs are open
+    "max_job_length": 16,            # Truncate overly long project names in tab titles
     "task_dots": {
         "agent": "🟣",
         "transfer": "🟠",
@@ -87,6 +90,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "git": "🔵",
         "container": "🟦",
         "archive": "📦",
+        "package": "🟦",
         "command": "⚪",
         "idle": "⚫",
     },
@@ -99,12 +103,21 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "git": "#3b82f6",
         "container": "#0ea5e9",
         "archive": "#a855f7",
+        "package": "#0284c7",
         "command": "#6b7280",
         "idle": "#000000",
     },
     "known_agents": ["agy", "claude", "aider", "copilot", "cursor-agent", "gemini", "codex", "opencode", "openhands"],
     "known_transfers": ["rsync", "scp", "sftp", "rclone", "ftp", "bcp"],
     "known_downloads": ["curl", "wget", "aria2c", "axel", "yt-dlp"],
+    "known_packages": [
+        "apt", "apt-get", "dpkg", "nala", "aptitude", "pkcon",
+        "pacman", "yay", "paru", "pamac",
+        "dnf", "yum", "rpm",
+        "zypper", "apk",
+        "snap", "flatpak", "brew",
+        "do-release-upgrade", "neon-upgrade"
+    ],
     "known_builds": [
         "cargo", "make", "ninja", "cmake", "go", "mvn", "gradle",
         "npm", "yarn", "pnpm", "rustc", "gcc", "clang", "g++"

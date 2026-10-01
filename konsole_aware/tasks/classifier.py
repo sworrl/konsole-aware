@@ -38,7 +38,7 @@ class CommandClassifier:
         if not tokens:
             tokens = [cmd_clean]
 
-        # Strip environment variables and sudo prefixes (e.g. 'sudo rsync', 'VAR=1 cargo build')
+        # Strip environment variables and sudo prefixes (e.g. 'sudo rsync', 'VAR=1 cargo build', 'sudo -E apt update')
         idx = 0
         while idx < len(tokens):
             tok = tokens[idx]
@@ -47,6 +47,11 @@ class CommandClassifier:
                 continue
             if tok in ("sudo", "doas", "nohup", "time", "nice", "ionice", "strace"):
                 idx += 1
+                while idx < len(tokens) and tokens[idx].startswith("-"):
+                    flag = tokens[idx]
+                    idx += 1
+                    if flag in ("-u", "-g", "-p", "-h", "-C") and idx < len(tokens):
+                        idx += 1
                 continue
             break
 
@@ -86,7 +91,79 @@ class CommandClassifier:
                 "is_test": False,
             }
 
-        # 2. File Transfers
+        # 2. Package Managers & System Updates (apt, apt-get, nala, pacman, dnf, zypper, snap, etc.)
+        pkg_managers = set(self.config.get("known_packages", [])) | {
+            "apt", "apt-get", "dpkg", "nala", "aptitude", "pkcon",
+            "pacman", "yay", "paru", "pamac",
+            "dnf", "yum", "rpm",
+            "zypper", "apk",
+            "snap", "flatpak", "brew",
+            "do-release-upgrade", "neon-upgrade"
+        }
+        if base_cmd in pkg_managers:
+            action = ""
+            targets = []
+            for a in args:
+                if a.startswith("-"):
+                    if base_cmd in ("pacman", "yay", "paru", "pamac") and not action:
+                        action = a
+                    continue
+                if not action:
+                    action = a
+                else:
+                    targets.append(a)
+
+            action_lower = action.lower()
+            if action_lower in ("update", "check-update", "refresh", "-sy", "-syy"):
+                pkg_action = "update"
+                icon = "🔄"
+                badge = "UPDT"
+                detail = f"{base_cmd} update"
+            elif action_lower in ("upgrade", "full-upgrade", "dist-upgrade", "-syu", "-syyu"):
+                pkg_action = action_lower
+                icon = "⬆️"
+                badge = "UPGR"
+                detail = f"{base_cmd} {action_lower}"
+            elif action_lower in ("install", "add", "i", "-s"):
+                pkg_action = "install"
+                icon = "📥"
+                badge = "INST"
+                target_str = f" {', '.join(targets[:2])}" if targets else ""
+                detail = f"{base_cmd} install{target_str}"
+            elif action_lower in ("remove", "purge", "autoremove", "auto-remove", "uninstall", "-r", "-rns"):
+                pkg_action = action_lower
+                icon = "🗑️"
+                badge = "RM"
+                target_str = f" {', '.join(targets[:2])}" if targets else ""
+                detail = f"{base_cmd} {action_lower}{target_str}"
+            elif action_lower in ("clean", "autoclean", "-sc"):
+                pkg_action = "clean"
+                icon = "🧹"
+                badge = "CLN"
+                detail = f"{base_cmd} clean"
+            else:
+                pkg_action = action or "manage"
+                icon = emojis.get("package", "📦")
+                badge = "PKGS"
+                target_str = f" {', '.join(targets[:2])}" if targets else ""
+                detail = f"{base_cmd} {pkg_action}{target_str}"
+
+            return {
+                "category": "package",
+                "name": f"{base_cmd} {pkg_action}",
+                "detail": detail[:30],
+                "icon": icon,
+                "task_dot": task_dots.get("package", "🟦"),
+                "badge": badge,
+                "color": colors.get("busy", "#f59e0b"),
+                "is_agent": False,
+                "is_transfer": False,
+                "is_build": False,
+                "is_test": False,
+                "is_package": True,
+            }
+
+        # 3. File Transfers
         known_transfers = self.config.get("known_transfers", [])
         if base_cmd in known_transfers or base_cmd in ("rsync", "scp", "sftp", "rclone", "bcp"):
             target = args[-1] if args else ""

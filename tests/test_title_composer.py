@@ -60,6 +60,29 @@ class TestTitleComposer(unittest.TestCase):
         self.assertIn("🟢", title_test)
         self.assertIn("❌", title_test)
 
+    def test_compose_package(self):
+        title = self.composer.compose(
+            job_name="sys",
+            task_category="package",
+            status="busy",
+            detail="apt-get update",
+        )
+        self.assertIn("sys", title)
+        self.assertIn("🟦", title)
+        self.assertIn("apt-get update", title)
+
+    def test_compose_compact_duration(self):
+        title = self.composer.compose(
+            job_name="myproj",
+            task_category="agent",
+            status="done",
+            detail="ready in 3h 44m",
+            agent="agy",
+        )
+        self.assertIn("ready (3h 44m)", title)
+        self.assertNotIn("ready in", title)
+        self.assertIn("🪐 AGY", title)
+
     def test_task_dot_mapping(self):
         self.assertEqual(self.composer.get_task_dot("agent"), "🟣")
         self.assertEqual(self.composer.get_task_dot("transfer"), "🟠")
@@ -68,7 +91,9 @@ class TestTitleComposer(unittest.TestCase):
         self.assertEqual(self.composer.get_task_dot("test"), "🟢")
         self.assertEqual(self.composer.get_task_dot("git"), "🔵")
         self.assertEqual(self.composer.get_task_dot("container"), "🟦")
+        self.assertEqual(self.composer.get_task_dot("package"), "🟦")
 
 
 if __name__ == "__main__":
     unittest.main()
+

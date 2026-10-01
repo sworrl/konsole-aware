@@ -156,6 +156,17 @@ class TitleComposer:
         )
         status_icon = self.get_status_icon(status)
 
+        # Clean and compact detail (e.g. 'ready in 55s' -> 'ready (55s)', 'ready in 3h 44m' -> 'ready (3h 44m)')
+        clean_detail = detail.strip() if detail else ""
+        if status in ("done", "ready"):
+            if clean_detail.startswith("ready in "):
+                clean_detail = f"ready ({clean_detail[9:].strip()})"
+
+        # Limit overly long project names
+        max_job = self.config.get("max_job_length", 16)
+        if resolved_job and len(resolved_job) > max_job:
+            resolved_job = resolved_job[:max_job - 1] + "…"
+
         parts = []
 
         # 1. Anchored pin
@@ -163,9 +174,11 @@ class TitleComposer:
             parts.append("📌")
 
         # 2. Agent identity (✳️ CLAUDE / 🪐 AGY / 👤 USER) and its mode
-        if show_identity:
+        is_agent = agent != agent_identity.USER
+        show_user_tag = self.config.get("show_user_identity", False)
+        if show_identity and (is_agent or show_user_tag or task_category == "idle"):
             parts.append(agent_identity.identity_tag(agent))
-        if show_mode and agent != agent_identity.USER:
+        if show_mode and is_agent:
             tag = agent_identity.mode_tag(mode)
             if tag:
                 parts.append(tag)
@@ -187,21 +200,19 @@ class TitleComposer:
             elif resolved_icon:
                 parts.append(f"[{resolved_icon}]")
 
-        # 5. Task colored dot: distinct agent dot (🟠 Claude, 🔵 AGY, etc.) or category dot
-        is_agent_tab = show_identity and agent != agent_identity.USER
+        # 5. Task colored dot: distinct agent dot (🟠 Claude, 🔵 AGY) or category dot
         if show_task_dot and task_category != "idle":
-            if is_agent_tab:
+            if is_agent:
                 parts.append(agent_identity.agent_dot(agent))
             else:
                 parts.append(self.get_task_dot(task_category))
 
         # 6. Status icon + detail
-        if detail:
-            # If detail already has status icon (e.g. '🧠 ...' or '✅ ...'), don't duplicate
-            if any(detail.startswith(ic) for ic in STATUS_ICONS.values()):
-                parts.append(detail)
+        if clean_detail:
+            if any(clean_detail.startswith(ic) for ic in STATUS_ICONS.values()):
+                parts.append(clean_detail)
             else:
-                parts.append(f"{status_icon} {detail}".strip())
+                parts.append(f"{status_icon} {clean_detail}".strip())
         else:
             parts.append(status_icon)
 

@@ -64,6 +64,44 @@ class TestCommandClassifier(unittest.TestCase):
         self.assertEqual(res_test["category"], "test")
         self.assertIn("cargo test", res_test["name"])
 
+    def test_classify_package_managers(self):
+        # sudo apt-get update
+        res_update = self.clf.classify("sudo apt-get update")
+        self.assertEqual(res_update["category"], "package")
+        self.assertEqual(res_update["name"], "apt-get update")
+        self.assertEqual(res_update["icon"], "🔄")
+        self.assertEqual(res_update["badge"], "UPDT")
+        self.assertTrue(res_update["is_package"])
+
+        # sudo -E apt-get update (with sudo flags)
+        res_sudo_flag = self.clf.classify("sudo -E apt-get update")
+        self.assertEqual(res_sudo_flag["category"], "package")
+        self.assertEqual(res_sudo_flag["name"], "apt-get update")
+
+        # sudo apt full-upgrade
+        res_upgrade = self.clf.classify("sudo apt full-upgrade")
+        self.assertEqual(res_upgrade["category"], "package")
+        self.assertEqual(res_upgrade["name"], "apt full-upgrade")
+        self.assertEqual(res_upgrade["icon"], "⬆️")
+        self.assertEqual(res_upgrade["badge"], "UPGR")
+
+        # sudo apt install nginx
+        res_inst = self.clf.classify("sudo apt install nginx")
+        self.assertEqual(res_inst["category"], "package")
+        self.assertEqual(res_inst["name"], "apt install")
+        self.assertIn("nginx", res_inst["detail"])
+        self.assertEqual(res_inst["badge"], "INST")
+
+        # pacman -Syu
+        res_pacman = self.clf.classify("pacman -Syu")
+        self.assertEqual(res_pacman["category"], "package")
+        self.assertEqual(res_pacman["badge"], "UPGR")
+
+        # snap refresh
+        res_snap = self.clf.classify("snap refresh")
+        self.assertEqual(res_snap["category"], "package")
+        self.assertEqual(res_snap["badge"], "UPDT")
+
     def test_classify_empty(self):
         res = self.clf.classify("")
         self.assertEqual(res["category"], "idle")
@@ -71,3 +109,4 @@ class TestCommandClassifier(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

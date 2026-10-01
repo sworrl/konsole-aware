@@ -702,6 +702,9 @@ extern "C" __attribute__((visibility("default"))) QAction *_ZN5QMenu4execERK6QPo
         return real(self, p, action);
     }
 
+    tabBar->setElideMode(Qt::ElideRight);
+    tabBar->setUsesScrollButtons(true);
+
     // Drop anything left over from a previous display (including submenus).
     removeInjected(self, false);
 
