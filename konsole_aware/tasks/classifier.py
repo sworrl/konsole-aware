@@ -61,7 +61,7 @@ class CommandClassifier:
 
         emojis = self.config.get("emojis", {})
         colors = self.config.get("colors", {})
-
+        task_colors = self.config.get("task_colors", {})
         task_dots = self.config.get("task_dots", {})
 
         # 1. Agents (exact process names, launchers like `npx claude-code`, versioned binaries)
@@ -151,11 +151,11 @@ class CommandClassifier:
             return {
                 "category": "package",
                 "name": f"{base_cmd} {pkg_action}",
-                "detail": detail[:30],
+                "detail": f"{icon} {detail}"[:30],
                 "icon": icon,
                 "task_dot": task_dots.get("package", "🟦"),
                 "badge": badge,
-                "color": colors.get("busy", "#f59e0b"),
+                "color": task_colors.get("package", colors.get("busy", "#0284c7")),
                 "is_agent": False,
                 "is_transfer": False,
                 "is_build": False,

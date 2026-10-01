@@ -158,9 +158,8 @@ class TitleComposer:
 
         # Clean and compact detail (e.g. 'ready in 55s' -> 'ready (55s)', 'ready in 3h 44m' -> 'ready (3h 44m)')
         clean_detail = detail.strip() if detail else ""
-        if status in ("done", "ready"):
-            if clean_detail.startswith("ready in "):
-                clean_detail = f"ready ({clean_detail[9:].strip()})"
+        if clean_detail.startswith("ready in "):
+            clean_detail = f"ready ({clean_detail[9:].strip()})"
 
         # Limit overly long project names
         max_job = self.config.get("max_job_length", 16)
@@ -209,7 +208,8 @@ class TitleComposer:
 
         # 6. Status icon + detail
         if clean_detail:
-            if any(clean_detail.startswith(ic) for ic in STATUS_ICONS.values()):
+            first_char = clean_detail[0] if clean_detail else ""
+            if any(clean_detail.startswith(ic) for ic in STATUS_ICONS.values()) or ord(first_char) > 1000:
                 parts.append(clean_detail)
             else:
                 parts.append(f"{status_icon} {clean_detail}".strip())

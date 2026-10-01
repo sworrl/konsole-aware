@@ -64,3 +64,53 @@ class TestNotifierTimeout(unittest.TestCase):
         self.assertIn("-t", cmd)
         self.assertEqual(cmd[cmd.index("-t") + 1], "4000")
         self.assertEqual(cmd[cmd.index("-u") + 1], "normal")
+
+
+class TestTabRefresh(unittest.TestCase):
+    def test_refresh_all_tabs_mocked(self):
+        from unittest import mock
+        import argparse
+        from konsole_aware.cli import refresh_all_tabs, cmd_refresh
+
+        fake_sessions = [
+            {
+                "service": "org.kde.konsole-1234",
+                "session_path": "/Sessions/1",
+                "session_num": "1",
+                "session_key": "org.kde.konsole-1234:/Sessions/1",
+                "window": "/Windows/1",
+                "is_active_tab": True,
+                "tab_index": 0,
+                "pane_index": 0,
+                "title0": "",
+                "title1": "",
+                "tab_color": "",
+                "shell_pid": 100,
+                "foreground_pid": 101,
+                "is_idle_shell": False,
+                "command": "agy --dangerously-skip-permissions",
+                "cwd": "/home/user/project",
+            }
+        ]
+
+        with mock.patch("konsole_aware.terminal.konsole.KonsoleTerminal.list_all_sessions", return_value=fake_sessions), \
+             mock.patch("konsole_aware.terminal.konsole.KonsoleTerminal.is_available", return_value=True), \
+             mock.patch("konsole_aware.terminal.konsole.KonsoleTerminal.set_title", return_value=True) as mock_title, \
+             mock.patch("konsole_aware.terminal.konsole.KonsoleTerminal.set_tab_color", return_value=True) as mock_color, \
+             mock.patch("konsole_aware.terminal.konsole.KonsoleTerminal.set_badge", return_value=True) as mock_badge, \
+             mock.patch("konsole_aware.terminal.dbus.call", return_value=""):
+
+            res = refresh_all_tabs(quiet=True)
+            self.assertEqual(res, 0)
+            mock_title.assert_called_once()
+            mock_color.assert_called_once_with("#4285f4")
+            mock_badge.assert_called_once()
+
+            # Test cmd_refresh
+            args = argparse.Namespace(tab=None, service=None)
+            cmd_res = cmd_refresh(args)
+            self.assertEqual(cmd_res, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

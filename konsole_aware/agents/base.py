@@ -22,6 +22,7 @@ STATUS_STYLE = {
     "compacting": ("busy", "COMPACT"),
     "waiting": ("waiting", "WAIT"),
     "done": ("done", "DONE"),
+    "ready": ("done", "READY"),
     "error": ("error", "ERR"),
     "blocked": ("blocked", "BLOCKED"),
     "limited": ("limited", "LIMIT"),

@@ -837,10 +837,159 @@ def cmd_alert(args: argparse.Namespace) -> int:
     return 0
 
 
+def refresh_all_tabs(service: Optional[str] = None, session_num: Optional[int] = None, quiet: bool = False) -> int:
+    """Live refresh of titles, colors, and badges for open Konsole tabs without tab restarts."""
+    from konsole_aware.agents.base import STATUS_STYLE
+    from konsole_aware.terminal import dbus
+
+    config = load_config()
+    composer = TitleComposer()
+    classifier = CommandClassifier()
+    state_mgr = StateManager()
+    group_mgr = TabGroupManager()
+
+    sessions = KonsoleTerminal.list_all_sessions(service=service)
+    if session_num is not None:
+        sessions = [s for s in sessions if s.get("session_num") == str(session_num)]
+    if not sessions:
+        if not quiet:
+            print("No active Konsole tabs found.")
+        return 0
+
+    services_seen = set()
+    for s in sessions:
+        srv = s.get("service")
+        win = s.get("window")
+        if srv and win and (srv, win) not in services_seen:
+            services_seen.add((srv, win))
+            try:
+                dbus.call(srv, win, "org.kde.konsole.Window.setTabWidthToText", "true")
+            except Exception:
+                pass
+
+    updated = 0
+    for s in sessions:
+        s_key = s["session_key"]
+        kterm = KonsoleTerminal(service=s["service"], session_path=s["session_path"])
+        if not kterm.is_available():
+            continue
+
+        state = state_mgr.get_session(s_key)
+        fg_pid = s["foreground_pid"]
+        shell_pid = s["shell_pid"]
+        agent, _ = agent_identity.resolve_session_agent(state, fg_pid, shell_pid)
+        cwd = state.get("cwd") or s.get("cwd")
+
+        if agent != agent_identity.USER:
+            a_status = state.get("agent_status") or state.get("status") or "idle"
+            detail = state.get("detail") or ""
+            if detail.startswith("ready in "):
+                detail = f"ready ({detail[9:].strip()})"
+            title = composer.compose(
+                session_key=s_key,
+                task_category="agent",
+                status=a_status,
+                detail=detail,
+                cwd=cwd,
+                agent=agent,
+                mode=state.get("agent_mode"),
+            )
+            color_key, badge = STATUS_STYLE.get(a_status, STATUS_STYLE["busy"])
+            colors = config.get("colors", {})
+            color = colors.get(color_key, "#f59e0b")
+            ident = agent_identity.identity(agent)
+            tab_mode = config.get("tab_color_mode", "agent")
+            if tab_mode == "agent" and color_key not in ("waiting", "error", "blocked", "limited"):
+                color = ident.get("color", color)
+            elif tab_mode == "agent_status" and color_key not in ("waiting", "error", "blocked", "limited", "done"):
+                color = ident.get("color", color)
+
+            kterm.set_title(title, role=0)
+            kterm.set_tab_color(color)
+            kterm.set_badge(f"{ident.get('label', '')} · {badge}", enabled=True, icon=ident.get("icon", ""))
+            updated += 1
+        else:
+            cmd = "" if s["is_idle_shell"] else s["command"]
+            if cmd:
+                classified = classifier.classify(cmd)
+                title = composer.compose(
+                    session_key=s_key,
+                    task_category=classified["category"],
+                    status="busy",
+                    detail=classified["detail"] or classified["name"],
+                    cwd=cwd,
+                    agent=agent_identity.USER,
+                )
+                kterm.set_title(title, role=0)
+                kterm.set_tab_color(classified["color"])
+                kterm.set_badge(classified["badge"], enabled=True)
+                updated += 1
+            else:
+                if state.get("status") in ("done", "error"):
+                    task_name = state.get("task_name") or "task"
+                    task_type = state.get("task_type") or "command"
+                    dur = state.get("duration", 0)
+                    dur_str = _fmt_duration(dur)
+                    if state.get("status") == "done":
+                        title = composer.compose(
+                            session_key=s_key,
+                            task_category=task_type,
+                            status="done",
+                            detail=f"{task_name} ({dur_str})",
+                            cwd=cwd,
+                            agent=agent_identity.USER,
+                        )
+                        kterm.set_title(title, role=0)
+                        kterm.set_tab_color(config.get("colors", {}).get("done", "#10b981"))
+                        kterm.set_badge("DONE", enabled=True)
+                    else:
+                        exit_code = state.get("exit_code", 1)
+                        title = composer.compose(
+                            session_key=s_key,
+                            task_category=task_type,
+                            status="error",
+                            detail=f"{task_name} (exit {exit_code})",
+                            cwd=cwd,
+                            agent=agent_identity.USER,
+                        )
+                        kterm.set_title(title, role=0)
+                        kterm.set_tab_color(config.get("colors", {}).get("error", "#ef4444"))
+                        kterm.set_badge("ERR", enabled=True)
+                else:
+                    title = composer.compose(
+                        session_key=s_key,
+                        task_category="idle",
+                        status="idle",
+                        detail="",
+                        cwd=cwd,
+                        agent=agent_identity.USER,
+                    )
+                    kterm.set_title(title, role=0)
+                    grp = group_mgr.get_tab_group(s_key)
+                    if grp and grp.get("color"):
+                        kterm.set_tab_color(grp["color"])
+                    else:
+                        kterm.reset_tab_color()
+                    kterm.set_badge("", enabled=False)
+                updated += 1
+
+    if not quiet:
+        print(f"✓ Refreshed {updated} Konsole tab{'s' if updated != 1 else ''} live.")
+    return 0
+
+
+def cmd_refresh(args: argparse.Namespace) -> int:
+    """Refresh tab titles, colors, and badges across all open Konsole tabs."""
+    tab = getattr(args, "tab", None)
+    service = getattr(args, "service", None)
+    return refresh_all_tabs(service=service, session_num=tab)
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     """Install konsole-aware into user environment, shells, agy, and claude."""
     repo_root = Path(__file__).resolve().parent.parent
     status = installer.install(repo_root, build_menu=not args.no_menu)
+    refresh_all_tabs(quiet=True)
     print("\n🎉 Installation completed." if status == 0 else "\n⚠ Installation completed with errors (see above).")
     print("👉 Reload your shell: 'source ~/.zshrc' (or open a new Konsole tab)")
     return status
@@ -988,6 +1137,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_reset = subparsers.add_parser("reset", help="Reset tab appearance")
     _add_target(p_reset)
     p_reset.set_defaults(func=cmd_reset)
+
+    p_refresh = subparsers.add_parser("refresh", aliases=["reload"], help="Refresh titles, colors, and badges on all open tabs")
+    _add_target(p_refresh)
+    p_refresh.set_defaults(func=cmd_refresh)
 
     p_alert = subparsers.add_parser("alert", help="Send test alert notification & sound")
     p_alert.add_argument("title", help="Alert title")

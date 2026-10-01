@@ -427,6 +427,7 @@ void injectActions(QMenu *self, const TabCtx &ctx)
 
     // 2. Snap project tabs together
     markInjected(addTabCliAction(self, QStringLiteral("🧲 Snap Project Tabs Together"), ctx, {QStringLiteral("snap")}));
+    markInjected(addTabCliAction(self, QStringLiteral("🔄 Refresh All Tabs"), ctx, {QStringLiteral("refresh")}));
 
     // 3. Colour
     QMenu *menuColor = self->addMenu(QStringLiteral("🎨 Tab Color"));
