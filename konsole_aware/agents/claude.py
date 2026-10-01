@@ -349,7 +349,7 @@ class ClaudeHandler(BaseAgentHandler):
             if not switch and events["fallback"]:
                 switch = {"to": "fallback model", "category": events["fallback"]}
             note = f" · 🛡️ on {switch['to']}" if switch.get("to") else ""
-            self.render("done", (f"ready in {dur}" if dur else "ready") + note, cwd=cwd, mode=mode)
+            self.render("done", (f"ready ({dur})" if dur else "ready") + note, cwd=cwd, mode=mode)
             self.alert("Claude Code Complete",
                        f"Claude finished{' in ' + dur if dur else ''} in {self.session_label()} ({project})"
                        + (f" (switched to {switch['to']} after a flag)" if switch.get("to") else ""))

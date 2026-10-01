@@ -88,7 +88,7 @@ class AgyHandler(BaseAgentHandler):
             else:
                 self.state_mgr.finish_task(self.session_key, exit_code=0, status="done")
                 bg = "" if payload.get("fullyIdle", True) else " · bg tasks running"
-                self.render("done", (f"ready in {dur}" if dur else "ready") + bg, cwd=cwd)
+                self.render("done", (f"ready ({dur})" if dur else "ready") + bg, cwd=cwd)
                 self.alert("Antigravity Complete",
                            f"Antigravity finished{' in ' + dur if dur else ''} in {self.session_label()} ({project})")
 
