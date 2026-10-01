@@ -12,6 +12,9 @@ from typing import Any, Dict, List, Optional
 from konsole_aware.config import load_config, save_config, DEFAULT_CONFIG
 from konsole_aware.terminal import get_terminal
 from konsole_aware.terminal.konsole import KonsoleTerminal
+from konsole_aware.terminal.colors import colorize, get_color_tag, resolve_color_hex, pad_ansi, strip_ansi
+from konsole_aware.tabs.groups import TabGroupManager
+from konsole_aware.tabs.organizer import TabOrganizer
 from konsole_aware.state.manager import StateManager
 from konsole_aware.tasks.classifier import CommandClassifier
 from konsole_aware.notify.notifier import Notifier
@@ -22,7 +25,6 @@ from konsole_aware.daemon.watcher import TabWatcher
 
 def cmd_agent(args: argparse.Namespace) -> int:
     """Handle AI agent hooks (agy, claude)."""
-    # Read payload from stdin if available
     payload: Dict[str, Any] = {}
     if not sys.stdin.isatty():
         try:
@@ -63,18 +65,18 @@ def cmd_shell_preexec(args: argparse.Namespace) -> int:
     classifier = CommandClassifier()
     term = get_terminal()
     state_mgr = StateManager()
+    grp_mgr = TabGroupManager()
     session_id = term.get_session_id()
 
     classified = classifier.classify(cmd_str)
     if classified["category"] == "idle":
         return 0
 
-    # Save initial state
     orig_title = getattr(term, "get_title", lambda r: "")(0)
     orig_color = getattr(term, "get_tab_color", lambda: "")()
 
     state_mgr.start_task(
-        session_id=session_id,
+        session_key=session_id,
         task_name=classified["name"],
         task_type=classified["category"],
         detail=classified["detail"],
@@ -82,13 +84,13 @@ def cmd_shell_preexec(args: argparse.Namespace) -> int:
         original_color=orig_color,
     )
 
-    # Update terminal visuals
     icon = classified["icon"]
     name = classified["name"]
     detail = classified["detail"]
-    title_str = f"{icon} [{name}] {detail}".strip()
+    base_title = f"{icon} [{name}] {detail}".strip()
+    full_title = grp_mgr.format_title(session_id, base_title)
 
-    term.set_title(title_str, role=0)
+    term.set_title(full_title, role=0)
     term.set_tab_color(classified["color"])
     term.set_badge(classified["badge"], enabled=True)
     return 0
@@ -99,6 +101,7 @@ def cmd_shell_precmd(args: argparse.Namespace) -> int:
     exit_code = args.exit_code
     term = get_terminal()
     state_mgr = StateManager()
+    grp_mgr = TabGroupManager()
     config = load_config()
     notifier = Notifier()
     session_id = term.get_session_id()
@@ -108,7 +111,7 @@ def cmd_shell_precmd(args: argparse.Namespace) -> int:
         return 0
 
     status = "done" if exit_code == 0 else "error"
-    finished = state_mgr.finish_task(session_id, exit_code=exit_code, status=status)
+    finished = state_mgr.finish_task(session_key=session_id, exit_code=exit_code, status=status)
 
     duration = finished.get("duration", 0.0)
     min_dur = config.get("min_duration_seconds", 3.0)
@@ -121,15 +124,16 @@ def cmd_shell_precmd(args: argparse.Namespace) -> int:
     colors = config.get("colors", {})
 
     if exit_code == 0:
-        term.set_title(f"✅ [Done {dur_str}] {task_name}", role=0)
+        base_title = f"✅ [Done {dur_str}] {task_name}"
+        term.set_title(grp_mgr.format_title(session_id, base_title), role=0)
         term.set_tab_color(colors.get("done", "#10b981"))
         term.set_badge("DONE", enabled=True)
     else:
-        term.set_title(f"❌ [Exit {exit_code} ({dur_str})] {task_name}", role=0)
+        base_title = f"❌ [Exit {exit_code} ({dur_str})] {task_name}"
+        term.set_title(grp_mgr.format_title(session_id, base_title), role=0)
         term.set_tab_color(colors.get("error", "#ef4444"))
         term.set_badge("ERR", enabled=True)
 
-    # Decide whether to notify
     is_notifiable = duration >= min_dur or task_type in ("agent", "transfer", "build", "download")
     if is_notifiable:
         unfocused_only = config.get("alert_only_unfocused", True)
@@ -157,7 +161,7 @@ def cmd_shell_precmd(args: argparse.Namespace) -> int:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    """List all Konsole tabs, sessions, foreground processes, and statuses."""
+    """List all Konsole tabs, sessions, foreground processes, groups, and statuses."""
     watcher = TabWatcher()
     watcher.tick()
     rows = watcher.get_dashboard_data()
@@ -170,25 +174,41 @@ def cmd_list(args: argparse.Namespace) -> int:
         print("No active Konsole sessions detected.")
         return 0
 
-    print("\n  🔍 Konsole Aware - Active Tab Status")
-    print("  " + "─" * 78)
-    fmt = "  {:<4} {:<6} {:<4} {:<24} {:<18} {:<12}"
-    print(fmt.format("WIN", "TAB", "ACT", "TITLE", "STATUS", "DURATION"))
-    print("  " + "─" * 78)
+    print("\n  🔍 " + colorize("Konsole Aware - Active Tab Status", bold=True))
+    print("  " + "─" * 94)
+    fmt_header = "  {:<4} {:<5} {:<4} {:<4} {:<14} {:<26} {:<20} {:<10}"
+    print(fmt_header.format("WIN", "TAB", "ACT", "PIN", "GROUP", "TITLE", "STATUS", "DURATION"))
+    print("  " + "─" * 94)
 
     for r in rows:
-        title_disp = r["title"][:22]
-        status_disp = r["status"][:16]
-        print(fmt.format(
-            r["window"],
-            r["session_num"],
-            r["active"],
-            title_disp,
-            status_disp,
-            r["duration"],
-        ))
+        act_icon = colorize("●", fg="#10b981", bold=True) if r["active"] == "●" else colorize("○", fg="#6b7280")
+        pin_icon = "📌" if r.get("is_anchored") else "-"
+        grp_str = f"[{r['group']}]" if r.get("group") else "-"
+        if r.get("group_color"):
+            grp_str = colorize(grp_str, fg=r["group_color"], bold=True)
 
-    print("  " + "─" * 78 + "\n")
+        status_raw = r["status"]
+        if "done" in status_raw.lower() or "ready" in status_raw.lower():
+            status_disp = colorize(status_raw[:18], fg="#10b981")
+        elif "think" in status_raw.lower() or "run" in status_raw.lower() or "busy" in status_raw.lower():
+            status_disp = colorize(status_raw[:18], fg="#f59e0b", bold=True)
+        elif "error" in status_raw.lower() or "fail" in status_raw.lower():
+            status_disp = colorize(status_raw[:18], fg="#ef4444", bold=True)
+        else:
+            status_disp = status_raw[:18]
+
+        col_win = pad_ansi(str(r["window"]), 4)
+        col_tab = pad_ansi(str(r["session_num"]), 5)
+        col_act = pad_ansi(act_icon, 4)
+        col_pin = pad_ansi(pin_icon, 4)
+        col_grp = pad_ansi(grp_str, 14)
+        col_title = pad_ansi(r["title"][:25], 26)
+        col_status = pad_ansi(status_disp, 20)
+        col_dur = pad_ansi(r["duration"], 10)
+
+        print(f"  {col_win} {col_tab} {col_act} {col_pin} {col_grp} {col_title} {col_status} {col_dur}")
+
+    print("  " + "─" * 94 + "\n")
     return 0
 
 
@@ -197,25 +217,276 @@ def cmd_switch(args: argparse.Namespace) -> int:
     sess_target = str(args.session)
     term = KonsoleTerminal(session_path=f"/Sessions/{sess_target}")
     if term.switch_to():
-        print(f"Switched to Konsole tab {sess_target}.")
+        print(f"✓ Switched to Konsole tab {sess_target}.")
         return 0
     print(f"Failed to switch to session {sess_target}.", file=sys.stderr)
     return 1
 
 
-def cmd_set_title(args: argparse.Namespace) -> int:
-    """Set tab title directly."""
+def cmd_group(args: argparse.Namespace) -> int:
+    """Manage tab grouping."""
+    grp_mgr = TabGroupManager()
+    action = args.group_action
+
+    if action == "list":
+        grps = grp_mgr.list_groups()
+        print("\n  🏷️  " + colorize("Konsole Aware - Tab Groups", bold=True))
+        print("  " + "─" * 70)
+        for g_name, g_info in grps.items():
+            icon = g_info.get("icon", "📁")
+            color = g_info.get("color", "#3b82f6")
+            colored_tag = colorize(f" {icon} {g_name.upper()} ", fg="#ffffff", bg=color, bold=True)
+            sessions = g_info.get("sessions", [])
+            s_list_str = ", ".join(s.split("/")[-1] for s in sessions) if sessions else "none"
+            print(f"  {colored_tag:<32} Tabs: {s_list_str}")
+        print("  " + "─" * 70 + "\n")
+        return 0
+
     term = get_terminal()
-    term.set_title(args.title, role=0)
-    print(f"Title set: {args.title}")
+    session_num = args.tab or (getattr(term, "get_session_num", lambda: None)() if hasattr(term, "get_session_num") else None)
+
+    if action == "auto":
+        sessions = KonsoleTerminal.list_all_sessions()
+        count = 0
+        for s in sessions:
+            fg_pid = s["foreground_pid"]
+            cwd_name = ""
+            if fg_pid > 0:
+                try:
+                    cwd = os.readlink(f"/proc/{fg_pid}/cwd")
+                    cwd_name = Path(cwd).name
+                except Exception:
+                    pass
+            if cwd_name and cwd_name not in ("reaver", "home", "root"):
+                s_key_item = f"{s['service']}:{s['session_path']}"
+                grp_mgr.define_group(cwd_name)
+                grp_mgr.assign_tab(s_key_item, cwd_name)
+                count += 1
+        print(f"✓ Auto-grouped {count} tabs by active project directory.")
+        return 0
+
+    if not session_num:
+        print("Error: Specify target tab with --tab <num> or run inside a Konsole tab.", file=sys.stderr)
+        return 1
+
+    svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
+    s_key = f"{svc}:/Sessions/{session_num}"
+
+    if action == "set":
+        grp_name = args.name
+        color = args.color
+        icon = args.icon
+        if color or icon:
+            grp_mgr.define_group(grp_name, color=color, icon=icon)
+        grp_mgr.assign_tab(s_key, grp_name)
+        grp_info = grp_mgr.get_tab_group(s_key)
+
+        # Set tab color to group color
+        if grp_info and hasattr(term, "set_tab_color"):
+            kterm = KonsoleTerminal(service=svc, session_path=f"/Sessions/{session_num}")
+            kterm.set_tab_color(grp_info["color"])
+
+        print(f"✓ Tab {session_num} assigned to group '{grp_name}'.")
+        return 0
+
+    elif action == "remove":
+        grp_mgr.unassign_tab(s_key)
+        print(f"✓ Tab {session_num} removed from groups.")
+        return 0
+
+    return 0
+
+
+def cmd_anchor(args: argparse.Namespace) -> int:
+    """Anchor (pin) a tab to the leftmost position."""
+    term = get_terminal()
+    grp_mgr = TabGroupManager()
+    session_num = args.tab or (getattr(term, "get_session_num", lambda: None)() if hasattr(term, "get_session_num") else None)
+    if not session_num:
+        print("Error: Specify tab with --tab <num> or run inside a tab.", file=sys.stderr)
+        return 1
+
+    svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
+    s_key = f"{svc}:/Sessions/{session_num}"
+    grp_mgr.anchor_tab(s_key)
+
+    organizer = TabOrganizer(service=svc)
+    win_info = organizer.find_session_window(str(session_num))
+    if win_info:
+        organizer.move_session_to_index(win_info[0], str(session_num), 0)
+
+    kterm = KonsoleTerminal(service=svc, session_path=f"/Sessions/{session_num}")
+    kterm.set_badge("PIN", enabled=True)
+
+    print(f"📌 Tab {session_num} anchored (pinned to front).")
+    return 0
+
+
+def cmd_unanchor(args: argparse.Namespace) -> int:
+    """Unanchor a tab."""
+    term = get_terminal()
+    grp_mgr = TabGroupManager()
+    session_num = args.tab or (getattr(term, "get_session_num", lambda: None)() if hasattr(term, "get_session_num") else None)
+    if not session_num:
+        print("Error: Specify tab with --tab <num> or run inside a tab.", file=sys.stderr)
+        return 1
+
+    svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
+    s_key = f"{svc}:/Sessions/{session_num}"
+    grp_mgr.unanchor_tab(s_key)
+
+    kterm = KonsoleTerminal(service=svc, session_path=f"/Sessions/{session_num}")
+    kterm.set_badge("", enabled=False)
+
+    print(f"✓ Tab {session_num} unanchored.")
+    return 0
+
+
+def cmd_organize(args: argparse.Namespace) -> int:
+    """Organize/sort tabs in windows."""
+    term = get_terminal()
+    svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
+    organizer = TabOrganizer(service=svc)
+    sort_by = args.by or "status"
+
+    if args.window:
+        win_path = f"/Windows/{args.window}"
+        res = organizer.organize_window(win_path, sort_by=sort_by)
+        print(f"✓ Window {args.window} organized by {sort_by}: {' -> '.join(res)}")
+    else:
+        results = organizer.organize_all(sort_by=sort_by)
+        for win, sess_list in results.items():
+            w_idx = win.split("/")[-1]
+            print(f"✓ Window {w_idx} organized by {sort_by}: {' -> '.join(sess_list)}")
+    return 0
+
+
+def cmd_move(args: argparse.Namespace) -> int:
+    """Move a tab left, right, first, last, or to an exact index."""
+    term = get_terminal()
+    svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
+    organizer = TabOrganizer(service=svc)
+    session_num = str(args.session)
+    dest = args.destination.lower()
+
+    win_info = organizer.find_session_window(session_num)
+    if not win_info:
+        print(f"Error: Session {session_num} not found in any window.", file=sys.stderr)
+        return 1
+
+    win_path, _ = win_info
+    sessions = organizer.get_window_sessions(win_path)
+    cur_idx = sessions.index(session_num)
+
+    if dest == "left":
+        target_idx = max(0, cur_idx - 1)
+    elif dest == "right":
+        target_idx = min(len(sessions) - 1, cur_idx + 1)
+    elif dest == "first":
+        target_idx = 0
+    elif dest == "last":
+        target_idx = len(sessions) - 1
+    elif dest.isdigit():
+        target_idx = max(0, min(len(sessions) - 1, int(dest)))
+    else:
+        print(f"Unknown destination '{dest}'. Use: left, right, first, last, or index.", file=sys.stderr)
+        return 1
+
+    organizer.move_session_to_index(win_path, session_num, target_idx)
+    print(f"✓ Moved Tab {session_num} to index {target_idx}.")
+    return 0
+
+
+def cmd_detach(args: argparse.Namespace) -> int:
+    """Detach a tab into its own independent Konsole window."""
+    term = get_terminal()
+    svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
+    organizer = TabOrganizer(service=svc)
+    session_num = args.session or (getattr(term, "get_session_num", lambda: None)() if hasattr(term, "get_session_num") else None)
+    if not session_num:
+        print("Error: Specify session number to detach with --session <num> or run inside a tab.", file=sys.stderr)
+        return 1
+
+    if organizer.detach_tab(str(session_num)):
+        print(f"✓ Tab {session_num} detached into a new window.")
+        return 0
+    print(f"Failed to detach tab {session_num}.", file=sys.stderr)
+    return 1
+
+
+def cmd_split(args: argparse.Namespace) -> int:
+    """Split view horizontally or vertically to reclip views together."""
+    term = get_terminal()
+    svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
+    organizer = TabOrganizer(service=svc)
+    session_num = args.tab or (getattr(term, "get_session_num", lambda: None)() if hasattr(term, "get_session_num") else None)
+    if not session_num:
+        print("Error: Specify tab with --tab <num> or run inside a tab.", file=sys.stderr)
+        return 1
+
+    orientation = args.orientation or "left-right"
+    if organizer.split_view(str(session_num), orientation=orientation):
+        print(f"✓ View split {orientation} for tab {session_num}.")
+        return 0
+    print("Failed to split view.", file=sys.stderr)
+    return 1
+
+
+def cmd_equalize(args: argparse.Namespace) -> int:
+    """Balance all split view sizes equally."""
+    term = get_terminal()
+    svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
+    organizer = TabOrganizer(service=svc)
+    session_num = args.tab or (getattr(term, "get_session_num", lambda: None)() if hasattr(term, "get_session_num") else None)
+    if not session_num:
+        print("Error: Specify tab with --tab <num> or run inside a tab.", file=sys.stderr)
+        return 1
+
+    if organizer.equalize_splits(str(session_num)):
+        print("✓ Balanced split views.")
+        return 0
+    return 1
+
+
+def cmd_maximize(args: argparse.Namespace) -> int:
+    """Toggle maximize on current split view."""
+    term = get_terminal()
+    svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
+    organizer = TabOrganizer(service=svc)
+    session_num = args.tab or (getattr(term, "get_session_num", lambda: None)() if hasattr(term, "get_session_num") else None)
+    if not session_num:
+        print("Error: Specify tab with --tab <num> or run inside a tab.", file=sys.stderr)
+        return 1
+
+    if organizer.toggle_maximize_split(str(session_num)):
+        print("✓ Toggled maximize on split view.")
+        return 0
+    return 1
+
+
+def cmd_set_title(args: argparse.Namespace) -> int:
+    """Set tab title directly with optional color tag and group/anchor awareness."""
+    term = get_terminal()
+    grp_mgr = TabGroupManager()
+    session_id = term.get_session_id()
+
+    title = args.title
+    if args.color_tag:
+        tag_glyph = get_color_tag(args.color_tag, square=args.square)
+        title = f"{tag_glyph} {title}"
+
+    full_title = grp_mgr.format_title(session_id, title)
+    term.set_title(full_title, role=0)
+    print(f"Title set: {full_title}")
     return 0
 
 
 def cmd_set_color(args: argparse.Namespace) -> int:
     """Set tab color directly."""
     term = get_terminal()
-    term.set_tab_color(args.color)
-    print(f"Color set: {args.color}")
+    hex_color = resolve_color_hex(args.color)
+    term.set_tab_color(hex_color)
+    print(f"Color set: {hex_color}")
     return 0
 
 
@@ -253,21 +524,41 @@ def cmd_watch(args: argparse.Namespace) -> int:
             watcher.tick()
             rows = watcher.get_dashboard_data()
             sys.stdout.write("\033[H")  # Move cursor to top
-            print("  ⚡ Konsole Aware - Live Monitor (Ctrl+C to stop)    ")
-            print("  " + "─" * 78)
-            fmt = "  {:<4} {:<6} {:<4} {:<24} {:<18} {:<12}  "
-            print(fmt.format("WIN", "TAB", "ACT", "TITLE", "STATUS", "DURATION"))
-            print("  " + "─" * 78)
+            print("  ⚡ " + colorize("Konsole Aware - Live Monitor", bold=True) + " (Ctrl+C to stop)        ")
+            print("  " + "─" * 94)
+            fmt = "  {:<4} {:<5} {:<4} {:<4} {:<12} {:<26} {:<20} {:<10}  "
+            print(fmt.format("WIN", "TAB", "ACT", "PIN", "GROUP", "TITLE", "STATUS", "DURATION"))
+            print("  " + "─" * 94)
             for r in rows:
+                act_icon = colorize("●", fg="#10b981", bold=True) if r["active"] == "●" else colorize("○", fg="#6b7280")
+                pin_icon = "📌" if r.get("is_anchored") else "-"
+                grp_str = f"[{r['group']}]" if r.get("group") else "-"
+                if r.get("group_color"):
+                    grp_str = colorize(grp_str, fg=r["group_color"], bold=True)
+
+                status_raw = r["status"]
+                if "done" in status_raw.lower() or "ready" in status_raw.lower():
+                    status_disp = colorize(status_raw[:18], fg="#10b981")
+                elif "think" in status_raw.lower() or "run" in status_raw.lower() or "busy" in status_raw.lower():
+                    status_disp = colorize(status_raw[:18], fg="#f59e0b", bold=True)
+                elif "error" in status_raw.lower() or "fail" in status_raw.lower():
+                    status_disp = colorize(status_raw[:18], fg="#ef4444", bold=True)
+                else:
+                    status_disp = status_raw[:18]
+
+                title_disp = r["title"][:24]
+
                 print(fmt.format(
                     r["window"],
                     r["session_num"],
-                    r["active"],
-                    r["title"][:22],
-                    r["status"][:16],
+                    act_icon,
+                    pin_icon,
+                    grp_str[:12],
+                    title_disp,
+                    status_disp,
                     r["duration"],
                 ))
-            print("  " + "─" * 78)
+            print("  " + "─" * 94)
             sys.stdout.flush()
             time.sleep(args.interval)
     except KeyboardInterrupt:
@@ -287,7 +578,6 @@ def cmd_install(args: argparse.Namespace) -> int:
     home = Path.home()
     repo_root = Path(__file__).resolve().parent.parent
 
-    # 1. Symlink binary to ~/.local/bin/konsole-aware
     local_bin = home / ".local" / "bin"
     local_bin.mkdir(parents=True, exist_ok=True)
     target_bin = local_bin / "konsole-aware"
@@ -299,7 +589,6 @@ def cmd_install(args: argparse.Namespace) -> int:
     source_bin.chmod(0o755)
     print(f"✓ Installed binary: {target_bin}")
 
-    # 2. Configure Antigravity hook (~/.gemini/config/hooks.json)
     gemini_config_dir = home / ".gemini" / "config"
     gemini_config_dir.mkdir(parents=True, exist_ok=True)
     agy_hooks_file = gemini_config_dir / "hooks.json"
@@ -345,7 +634,6 @@ def cmd_install(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"✗ Failed to configure Antigravity hooks: {e}", file=sys.stderr)
 
-    # 3. Configure Claude Code hooks (~/.claude/settings.json)
     claude_settings_file = home / ".claude" / "settings.json"
     if claude_settings_file.exists():
         try:
@@ -382,7 +670,6 @@ def cmd_install(args: argparse.Namespace) -> int:
         except Exception as e:
             print(f"✗ Failed to configure Claude Code hooks: {e}", file=sys.stderr)
 
-    # 4. Configure Shell Integration (~/.zshrc and ~/.bashrc)
     zsh_plugin = repo_root / "shell" / "konsole-aware.zsh"
     zshrc = home / ".zshrc"
     zsh_line = f'[[ -f "{zsh_plugin}" ]] && source "{zsh_plugin}" # konsole-aware'
@@ -407,7 +694,6 @@ def cmd_install(args: argparse.Namespace) -> int:
         else:
             print(f"✓ bash integration already present in {bashrc}")
 
-    # 5. Ensure default config exists
     load_config()
     print("\n🎉 Installation completed successfully!")
     print("👉 Reload your shell: 'source ~/.zshrc' (or open a new Konsole tab)")
@@ -418,13 +704,11 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     """Cleanly uninstall konsole-aware hooks and integrations."""
     home = Path.home()
 
-    # 1. Remove binary symlink
     target_bin = home / ".local" / "bin" / "konsole-aware"
     if target_bin.is_symlink() or target_bin.exists():
         target_bin.unlink()
         print(f"✓ Removed binary: {target_bin}")
 
-    # 2. Clean Antigravity hooks
     agy_hooks_file = home / ".gemini" / "config" / "hooks.json"
     if agy_hooks_file.exists():
         try:
@@ -438,7 +722,6 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         except Exception:
             pass
 
-    # 3. Clean Claude Code hooks
     claude_settings_file = home / ".claude" / "settings.json"
     if claude_settings_file.exists():
         try:
@@ -452,7 +735,6 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         except Exception:
             pass
 
-    # 4. Clean zshrc and bashrc
     for rc_name in (".zshrc", ".bashrc"):
         rc_path = home / rc_name
         if rc_path.exists():
@@ -468,7 +750,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="konsole-aware",
-        description="Terminal & Tab Awareness for Konsole, AI Agents (agy, claude), and long-running tasks.",
+        description="Terminal & Tab Awareness for Konsole, AI Agents (agy, claude), Grouping, Anchoring & Organization.",
     )
     subparsers = parser.add_subparsers(dest="subcommand")
 
@@ -489,7 +771,7 @@ def main() -> int:
     p_precmd.set_defaults(func=cmd_shell_precmd)
 
     # list / status
-    p_list = subparsers.add_parser("list", aliases=["status"], help="List all tabs and running tasks")
+    p_list = subparsers.add_parser("list", aliases=["status"], help="List all tabs, groups, and running tasks")
     p_list.add_argument("--json", action="store_true", help="Output as JSON")
     p_list.set_defaults(func=cmd_list)
 
@@ -498,14 +780,65 @@ def main() -> int:
     p_switch.add_argument("session", help="Session number (e.g. 1, 9)")
     p_switch.set_defaults(func=cmd_switch)
 
+    # group
+    p_group = subparsers.add_parser("group", help="Manage tab groupings and category colors")
+    p_group.add_argument("group_action", choices=["set", "remove", "list", "auto"], help="Group action")
+    p_group.add_argument("name", nargs="?", default="", help="Group name (e.g. frontend, backend, agents)")
+    p_group.add_argument("--tab", type=int, help="Target tab session number")
+    p_group.add_argument("--color", help="Hex color or color name for this group")
+    p_group.add_argument("--icon", help="Icon/emoji for this group (e.g. 🎨, 🤖, ⚙️)")
+    p_group.set_defaults(func=cmd_group)
+
+    # anchor / pin
+    p_anchor = subparsers.add_parser("anchor", aliases=["pin"], help="Anchor (pin) a tab to the leftmost position")
+    p_anchor.add_argument("--tab", type=int, help="Target tab session number")
+    p_anchor.set_defaults(func=cmd_anchor)
+
+    p_unanchor = subparsers.add_parser("unanchor", aliases=["unpin"], help="Unanchor a tab")
+    p_unanchor.add_argument("--tab", type=int, help="Target tab session number")
+    p_unanchor.set_defaults(func=cmd_unanchor)
+
+    # organize
+    p_org = subparsers.add_parser("organize", help="Organize and sort tabs in Konsole windows")
+    p_org.add_argument("--by", choices=["status", "group", "name", "id"], default="status", help="Sort criteria")
+    p_org.add_argument("--window", help="Specific window number (e.g. 1, 2)")
+    p_org.set_defaults(func=cmd_organize)
+
+    # move
+    p_move = subparsers.add_parser("move", help="Move a tab left, right, first, last, or to an index")
+    p_move.add_argument("session", help="Session number to move (e.g. 7)")
+    p_move.add_argument("destination", help="Target: left, right, first, last, or index number")
+    p_move.set_defaults(func=cmd_move)
+
+    # detach
+    p_detach = subparsers.add_parser("detach", help="Detach a tab into its own independent window")
+    p_detach.add_argument("session", nargs="?", help="Session number to detach (default: current)")
+    p_detach.set_defaults(func=cmd_detach)
+
+    # split / clip
+    p_split = subparsers.add_parser("split", aliases=["clip"], help="Split view horizontally or vertically in window")
+    p_split.add_argument("orientation", nargs="?", choices=["left-right", "top-bottom", "horizontal", "vertical"], default="left-right")
+    p_split.add_argument("--tab", type=int, help="Target tab session number")
+    p_split.set_defaults(func=cmd_split)
+
+    p_equalize = subparsers.add_parser("equalize", help="Equalize sizes of all split views")
+    p_equalize.add_argument("--tab", type=int, help="Target tab session number")
+    p_equalize.set_defaults(func=cmd_equalize)
+
+    p_max = subparsers.add_parser("maximize-split", help="Toggle maximize on the active split view")
+    p_max.add_argument("--tab", type=int, help="Target tab session number")
+    p_max.set_defaults(func=cmd_maximize)
+
     # set-title
     p_title = subparsers.add_parser("set-title", help="Set current tab title")
     p_title.add_argument("title", help="Title string")
+    p_title.add_argument("--color-tag", help="Prepend colored glyph (red, green, blue, yellow, purple, orange, etc.)")
+    p_title.add_argument("--square", action="store_true", help="Use square color badge instead of circle")
     p_title.set_defaults(func=cmd_set_title)
 
     # set-color
     p_color = subparsers.add_parser("set-color", help="Set current tab color")
-    p_color.add_argument("color", help="Hex color string (e.g. #f59e0b)")
+    p_color.add_argument("color", help="Color name (red, emerald, amber, blue, etc.) or hex code")
     p_color.set_defaults(func=cmd_set_color)
 
     # reset

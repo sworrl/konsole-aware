@@ -10,6 +10,7 @@ from konsole_aware.terminal.konsole import KonsoleTerminal
 from konsole_aware.tasks.classifier import CommandClassifier
 from konsole_aware.notify.notifier import Notifier
 from konsole_aware.state.manager import StateManager
+from konsole_aware.tabs.groups import TabGroupManager
 
 
 class TabWatcher:
@@ -21,6 +22,7 @@ class TabWatcher:
         self.classifier = CommandClassifier()
         self.notifier = Notifier()
         self.state_mgr = StateManager()
+        self.group_mgr = TabGroupManager()
         self._running = False
         # session_key -> state dict
         self._tracked: Dict[str, Dict[str, Any]] = {}
@@ -165,10 +167,18 @@ class TabWatcher:
             elif cmd:
                 status_str = f"Running: {cmd[:20]}"
 
+            grp = self.group_mgr.get_tab_group(s_key)
+            is_anchored = self.group_mgr.is_anchored(s_key)
+
             rows.append({
                 "window": s["window"].split("/")[-1] if "/" in s["window"] else s["window"],
                 "session_num": s["session_num"],
+                "session_key": s_key,
                 "active": "●" if s["is_active_tab"] else "○",
+                "is_anchored": is_anchored,
+                "group": grp["name"] if grp else "",
+                "group_color": grp.get("color", "") if grp else "",
+                "group_icon": grp.get("icon", "") if grp else "",
                 "title": s["title0"] or "-",
                 "command": cmd or "-",
                 "status": status_str,

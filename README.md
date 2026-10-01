@@ -56,13 +56,13 @@ konsole-aware list
 Example output:
 ```text
   🔍 Konsole Aware - Active Tab Status
-  ──────────────────────────────────────────────────────────────────────────────
-  WIN  TAB    ACT  TITLE                    STATUS             DURATION    
-  ──────────────────────────────────────────────────────────────────────────────
-  1    1      ○    Katamari                 ⚡ agy              14s         
-  1    7      ●    📥 [rsync] /data         📥 rsync           1m 24s      
-  2    9      ●    ✅ [Ready] agy            ✅ agy             12s         
-  ──────────────────────────────────────────────────────────────────────────────
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  WIN  TAB   ACT  PIN  GROUP          TITLE                      STATUS               DURATION  
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  1    1     ○    -    -              Katamari                   ⚡ agy                14s       
+  1    7     ●    -    [transfers]    📥 [rsync] /data           📥 rsync             1m 24s    
+  2    9     ●    📌   [agents]       ✅ [Ready] agy             ✅ agy               12s       
+  ──────────────────────────────────────────────────────────────────────────────────────────────
 ```
 
 Output raw JSON:
@@ -70,32 +70,116 @@ Output raw JSON:
 konsole-aware list --json
 ```
 
-### Live Interactive Monitor
+### Tab Grouping
 
-Monitor all tabs in a persistent terminal view:
+Assign tabs to custom color-coded groups:
 
 ```bash
-konsole-aware watch
+# Assign current tab (or --tab 9) to group 'agents' with purple color and icon
+konsole-aware group set agents --tab 9 --color "#8b5cf6" --icon "🤖"
+
+# Assign tab to 'backend' group
+konsole-aware group set backend --tab 4 --color "#3b82f6" --icon "⚙️"
+
+# Automatically group all open tabs by their active project directory
+konsole-aware group auto
+
+# List all groups and assigned tabs
+konsole-aware group list
+
+# Remove tab from group
+konsole-aware group remove --tab 9
 ```
 
-### Focus a Tab
+### Tab Anchoring (Pinning)
 
-Switch the active view in Konsole directly to tab 7:
+Anchor critical tabs to lock them at the leftmost position:
 
 ```bash
-konsole-aware switch 7
+# Pin current tab or tab 9 to the far left
+konsole-aware anchor --tab 9
+
+# Unpin tab
+konsole-aware unanchor --tab 9
 ```
 
-### Manual Visual Controls
+Anchored tabs carry a `📌` indicator in titles, display a `PIN` badge, and remain pinned to the front whenever tabs are sorted or organized.
 
-Scripts or one-off jobs can set tab properties directly:
+### Tab Organizing and Sorting
+
+Reorder tabs across windows automatically:
 
 ```bash
-# Set tab title
-konsole-aware set-title "📥 [Syncing 45%]"
+# Organize tabs: Anchored tabs first, then Busy tabs, then Done, then Idle
+konsole-aware organize --by status
 
-# Set tab color (hex)
+# Group all tabs of the same category or project together
+konsole-aware organize --by group
+
+# Sort tabs alphabetically by title or by session ID
+konsole-aware organize --by name
+konsole-aware organize --by id
+
+# Target a specific window (e.g. Window 2)
+konsole-aware organize --by status --window 2
+```
+
+### Moving Tabs Manually
+
+Shift tabs within their window:
+
+```bash
+konsole-aware move 9 left
+konsole-aware move 9 right
+konsole-aware move 9 first
+konsole-aware move 9 last
+konsole-aware move 9 2  # Move directly to index 2
+```
+
+### Detaching Tabs to New Windows
+
+Detach any tab into its own independent Konsole window:
+
+```bash
+# Detach tab 7 into a new window
+konsole-aware detach 7
+
+# Detach currently active tab
+konsole-aware detach
+```
+
+### Reclipping and Splitting Views
+
+Clip multiple views together side-by-side or stacked inside the same tab:
+
+```bash
+# Split view horizontally (side by side)
+konsole-aware split left-right
+
+# Split view vertically (top/bottom)
+konsole-aware split top-bottom
+
+# Balance all split view sizes equally
+konsole-aware equalize
+
+# Toggle maximize on the focused split view
+konsole-aware maximize-split
+```
+
+### Colored Text and Badges
+
+Apply color tags to titles and tint tabs:
+
+```bash
+# Prepend colored Unicode glyph (red, green, blue, yellow, purple, orange)
+konsole-aware set-title "Production Logs" --color-tag red
+
+# Use square color tags
+konsole-aware set-title "Build Worker" --color-tag emerald --square
+
+# Set tab background color directly (hex or color name)
 konsole-aware set-color "#f59e0b"
+konsole-aware set-color emerald
 
 # Reset tab appearance back to normal
 konsole-aware reset
