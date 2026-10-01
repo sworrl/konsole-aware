@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "konsole-aware"
+version = "1.0.0"
+description = "Terminal and Tab Awareness for Konsole, AI Agents (agy, claude), and long-running tasks."
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [
+    { name = "Reaver" }
+]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Terminals",
+]
+
+[project.scripts]
+konsole-aware = "konsole_aware.cli:main"

@@ -1,0 +1,12 @@
+[Unit]
+Description=Konsole Aware - Terminal & Tab Status Monitor Daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/konsole-aware daemon --interval 1.5
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
