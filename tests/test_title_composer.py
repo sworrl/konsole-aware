@@ -23,7 +23,7 @@ class TestTitleComposer(unittest.TestCase):
             status="thinking",
             detail="agy: thinking...",
         )
-        self.assertIn("[MyProject]", title)
+        self.assertIn("MyProject", title)
         self.assertIn("🟣", title)
         self.assertIn("🧠", title)
         self.assertIn("agy: thinking...", title)
@@ -35,7 +35,7 @@ class TestTitleComposer(unittest.TestCase):
             status="busy",
             detail="rsync -> remote",
         )
-        self.assertIn("[BackupJob]", title)
+        self.assertIn("BackupJob", title)
         self.assertIn("🟠", title)
         self.assertIn("rsync -> remote", title)
 
@@ -46,7 +46,7 @@ class TestTitleComposer(unittest.TestCase):
             status="done",
             detail="cargo build (42s)",
         )
-        self.assertIn("[CoreApp]", title_build)
+        self.assertIn("CoreApp", title_build)
         self.assertIn("🟡", title_build)
         self.assertIn("✅", title_build)
 
@@ -56,7 +56,7 @@ class TestTitleComposer(unittest.TestCase):
             status="error",
             detail="cargo test (exit 1)",
         )
-        self.assertIn("[CoreApp]", title_test)
+        self.assertIn("CoreApp", title_test)
         self.assertIn("🟢", title_test)
         self.assertIn("❌", title_test)
 

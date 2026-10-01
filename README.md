@@ -76,21 +76,83 @@ konsole-aware list --json
 
 ### Permanent Job and Project Context
 
-Tab titles permanently display the repository or directory context:
-`[konsole_aware] 🟣 🧠 agy: thinking...`
+Tab titles permanently display the repository or directory context with auto-detected or assigned icons:
+`[🐍 konsole_aware] 🟣 🧠 agy: thinking...`
+`[🧪 konsole_aware/tests] 🟣 🛠️ agy: cmd(...)`
 
-Override the detected project name with a permanent custom job name:
+Override the detected project name with a permanent custom job name and optional icon:
 
 ```bash
 # Set custom job name for the current tab
 konsole-aware set-job "Indexer"
 
-# Set custom job name for a specific tab (e.g. Tab 4)
-konsole-aware set-job "ETL-Pipeline" --tab 4
+# Set custom job name and icon together
+konsole-aware set-job "ETL-Pipeline" --icon "⚡" --tab 4
 
 # Clear custom job name to revert back to auto Git/directory detection
 konsole-aware set-job --clear
 ```
+
+### Folder & Project Icons (Tab Titles and Top-Right Badges)
+
+Icons are automatically picked based on the folder you are in or your project's marker files, and rendered both in the tab title (`[🧪 myproject/tests]`) and next to the top-right Konsole badge (`🧪 THINK`, `🦀 TOOL`, `🐍 DONE`):
+
+#### 1. Auto-Picked Icons
+
+- **Subfolders in Project**:
+  - `frontend/`, `client/`, `ui/` -> `🎨`
+  - `backend/`, `server/`, `api/` -> `⚙️` or `🔌`
+  - `tests/`, `test/`, `spec/` -> `🧪`
+  - `docs/`, `doc/` -> `📚`
+  - `scripts/`, `bin/`, `tools/` -> `📜` or `🛠️`
+  - `infra/`, `terraform/`, `k8s/` -> `☁️` or `☸️`
+  - `docker/`, `compose/` -> `🐳`
+  - `mobile/`, `ios/`, `android/` -> `📱` or `🍎`
+  - `data/`, `models/`, `notebooks/` -> `📊` or `🧠`
+
+- **Project Root Marker Files**:
+  - `Cargo.toml` -> `🦀` (Rust)
+  - `pyproject.toml`, `requirements.txt`, `setup.py` -> `🐍` (Python)
+  - `package.json`, `tsconfig.json` -> `📦` or `🟦` (Node / TypeScript)
+  - `go.mod` -> `🐹` (Go)
+  - `pom.xml`, `build.gradle` -> `☕` (Java)
+  - `Makefile`, `CMakeLists.txt` -> `🛠️` (C / C++)
+  - `Dockerfile`, `docker-compose.yml` -> `🐳` (Docker)
+  - `.git` -> `🐙` (Git)
+
+#### 2. Top-Right Konsole Badge Integration
+
+Konsole's top-right badge displays the resolved icon directly next to the state text:
+- `🐍 THINK` (when agent is thinking)
+- `🐍 TOOL` (when agent is executing tools)
+- `🧪 TEST` (when test runner is executing)
+- `🦀 BLD` (when compilation is in progress)
+- `🐍 DONE` (when task finished successfully)
+- `🐍 ERR` (when task failed)
+- `📌 PIN` (when tab is pinned)
+
+#### 3. Assigning and Customizing Icons
+
+```bash
+# Assign custom icon to current tab (or --tab <num>)
+konsole-aware set-icon 🚀
+konsole-aware set-icon 🦀 --tab 4
+
+# Clear custom icon (reverts to auto folder/project detection)
+konsole-aware set-icon --clear
+
+# Inspect which icon and rule was auto-picked for a directory or tab
+konsole-aware icon
+konsole-aware icon --path ./tests
+
+# Configure custom folder name mappings in user config
+konsole-aware set-folder-icon contracts 📜
+
+# List all built-in and user folder and file icon mappings
+konsole-aware set-folder-icon --list
+```
+
+You can also drop a `.konsole-icon` file (containing an emoji like `🔥`) or a `.konsole-aware.json` file (`{"icon": "🔥"}`) into any project or subfolder to lock its icon.
 
 ### Dual Color-Coding: Tasks vs Status
 

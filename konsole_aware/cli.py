@@ -16,6 +16,7 @@ from konsole_aware.terminal.colors import colorize, get_color_tag, resolve_color
 from konsole_aware.tabs.groups import TabGroupManager
 from konsole_aware.tabs.organizer import TabOrganizer
 from konsole_aware.tabs.title import TitleComposer
+from konsole_aware.tabs.icons import IconResolver
 from konsole_aware.state.manager import StateManager
 from konsole_aware.tasks.classifier import CommandClassifier
 from konsole_aware.notify.notifier import Notifier
@@ -494,20 +495,114 @@ def cmd_set_job(args: argparse.Namespace) -> int:
     svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
     s_key = f"{svc}:/Sessions/{session_num}"
 
+    updates: Dict[str, Any] = {}
     if args.clear:
-        state_mgr.set_session(s_key, job_name=None)
+        updates["job_name"] = None
         print(f"✓ Cleared custom job name for Tab {session_num} (reverted to auto project name).")
     else:
-        if not args.name:
-            print("Error: Specify job name (e.g. konsole-aware set-job MyProject).", file=sys.stderr)
-            return 1
-        job = args.name.strip()
-        state_mgr.set_session(s_key, job_name=job)
-        print(f"✓ Set custom job name for Tab {session_num}: [{job}]")
+        if args.name:
+            job = args.name.strip()
+            updates["job_name"] = job
+            print(f"✓ Set custom job name for Tab {session_num}: [{job}]")
+
+    if getattr(args, "icon", None):
+        icon_str = args.icon.strip()
+        updates["icon"] = icon_str
+        print(f"✓ Assigned icon {icon_str} to Tab {session_num}.")
+
+    if updates:
+        state_mgr.set_session(s_key, **updates)
 
     kterm = KonsoleTerminal(service=svc, session_path=f"/Sessions/{session_num}")
-    new_title = composer.compose(session_key=s_key, status="idle", detail="ready", cwd=os.getcwd())
+    new_title = composer.compose(session_key=s_key, status="idle", detail="ready", cwd=kterm.get_cwd())
     kterm.set_title(new_title, role=0)
+    return 0
+
+
+def cmd_set_icon(args: argparse.Namespace) -> int:
+    """Assign or clear an explicit icon for a tab."""
+    term = get_terminal()
+    state_mgr = StateManager()
+    composer = TitleComposer()
+    session_num = args.tab or (getattr(term, "get_session_num", lambda: None)() if hasattr(term, "get_session_num") else None)
+    if not session_num:
+        print("Error: Specify tab with --tab <num> or run inside a tab.", file=sys.stderr)
+        return 1
+
+    svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
+    s_key = f"{svc}:/Sessions/{session_num}"
+
+    if args.clear:
+        state_mgr.set_session(s_key, icon=None)
+        print(f"✓ Cleared custom icon for Tab {session_num} (reverted to auto folder/project icon).")
+    else:
+        if not args.icon:
+            print("Error: Specify icon (e.g. konsole-aware set-icon 🦀).", file=sys.stderr)
+            return 1
+        icon_str = args.icon.strip()
+        state_mgr.set_session(s_key, icon=icon_str)
+        print(f"✓ Assigned icon {icon_str} to Tab {session_num}.")
+
+    kterm = KonsoleTerminal(service=svc, session_path=f"/Sessions/{session_num}")
+    new_title = composer.compose(session_key=s_key, status="idle", detail="ready", cwd=kterm.get_cwd())
+    kterm.set_title(new_title, role=0)
+    return 0
+
+
+def cmd_set_folder_icon(args: argparse.Namespace) -> int:
+    """Set a custom folder icon in user configuration or list all mappings."""
+    config = load_config()
+    resolver = IconResolver()
+
+    if args.list:
+        print("\n  📂 " + colorize("Konsole Aware - Folder and Project File Icons", bold=True))
+        print("  " + "─" * 60)
+        print(colorize("  Folder Name Mappings:", bold=True))
+        folders = resolver.get_folder_icons()
+        for f in sorted(folders.keys()):
+            print(f"    {folders[f]}  {f}")
+        print("\n" + colorize("  Project Marker File Mappings:", bold=True))
+        markers = resolver.get_project_file_icons()
+        for m in sorted(markers.keys()):
+            print(f"    {markers[m]}  {m}")
+        print("  " + "─" * 60 + "\n")
+        return 0
+
+    if not args.folder or not args.icon:
+        print("Error: Specify folder and icon (e.g. konsole-aware set-folder-icon contracts 📜).", file=sys.stderr)
+        return 1
+
+    folder = args.folder.strip().lower()
+    icon_str = args.icon.strip()
+    if "folder_icons" not in config or not isinstance(config["folder_icons"], dict):
+        config["folder_icons"] = {}
+    config["folder_icons"][folder] = icon_str
+    save_config(config)
+    print(f"✓ Saved folder icon mapping: {folder} -> {icon_str}")
+    return 0
+
+
+def cmd_icon(args: argparse.Namespace) -> int:
+    """Inspect the auto-picked icon and resolution reason for a directory or tab."""
+    term = get_terminal()
+    resolver = IconResolver()
+    session_num = args.tab or (getattr(term, "get_session_num", lambda: None)() if hasattr(term, "get_session_num") else None)
+    svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
+    s_key = f"{svc}:/Sessions/{session_num}" if session_num else None
+
+    if session_num:
+        kterm = KonsoleTerminal(service=svc, session_path=f"/Sessions/{session_num}")
+        target_dir = args.path or kterm.get_cwd()
+    else:
+        target_dir = args.path or os.getcwd()
+
+    icon, reason = resolver.resolve_with_reason(session_key=s_key, cwd=target_dir)
+
+    print(f"Directory:       {target_dir}")
+    if session_num:
+        print(f"Tab Session:     {session_num} ({s_key})")
+    print(f"Resolved Icon:   {icon or '(none)'}")
+    print(f"Resolution Rule: {reason}")
     return 0
 
 
@@ -884,9 +979,30 @@ def main() -> int:
     # set-job
     p_job = subparsers.add_parser("set-job", help="Set or clear a permanent custom job/project name for a tab")
     p_job.add_argument("name", nargs="?", default="", help="Custom job or project name")
+    p_job.add_argument("--icon", help="Custom icon to assign alongside the job")
     p_job.add_argument("--tab", type=int, help="Target tab session number")
     p_job.add_argument("--clear", action="store_true", help="Clear custom job name (revert to auto)")
     p_job.set_defaults(func=cmd_set_job)
+
+    # set-icon
+    p_icon = subparsers.add_parser("set-icon", help="Assign or clear a custom icon for a tab")
+    p_icon.add_argument("icon", nargs="?", default="", help="Icon/emoji (e.g. 🦀, 🐍, ⚡, 🚀)")
+    p_icon.add_argument("--tab", type=int, help="Target tab session number")
+    p_icon.add_argument("--clear", action="store_true", help="Clear custom icon (revert to auto)")
+    p_icon.set_defaults(func=cmd_set_icon)
+
+    # set-folder-icon
+    p_ficon = subparsers.add_parser("set-folder-icon", help="Configure folder name to icon mapping in user config")
+    p_ficon.add_argument("folder", nargs="?", default="", help="Folder name (e.g. frontend, backend, tests)")
+    p_ficon.add_argument("icon", nargs="?", default="", help="Icon/emoji to map to this folder name")
+    p_ficon.add_argument("--list", action="store_true", help="List all folder and project file icon mappings")
+    p_ficon.set_defaults(func=cmd_set_folder_icon)
+
+    # icon
+    p_inspect_icon = subparsers.add_parser("icon", help="Inspect auto-detected icon and rule for current folder or tab")
+    p_inspect_icon.add_argument("--path", help="Directory path to inspect (default: current directory)")
+    p_inspect_icon.add_argument("--tab", type=int, help="Tab session number")
+    p_inspect_icon.set_defaults(func=cmd_icon)
 
     # set-title
     p_title = subparsers.add_parser("set-title", help="Set current tab title")

@@ -23,7 +23,7 @@ class BaseTerminal(ABC):
         pass
 
     @abstractmethod
-    def set_badge(self, text: str, enabled: bool = True) -> bool:
+    def set_badge(self, text: str, enabled: bool = True, icon: Optional[str] = None) -> bool:
         """Set badge text (if supported)."""
         pass
 

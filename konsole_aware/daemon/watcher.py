@@ -107,16 +107,10 @@ class TabWatcher:
                                 play_sound=True,
                             )
 
-                        s_cwd = None
-                        if fg_pid > 0:
-                            try:
-                                s_cwd = os.readlink(f"/proc/{fg_pid}/cwd")
-                            except Exception:
-                                pass
-
                         kterm = KonsoleTerminal(
                             service=s["service"], session_path=s["session_path"]
                         )
+                        s_cwd = kterm.get_cwd()
                         title = self.composer.compose(
                             session_key=s_key,
                             task_category=prev.get("category", "command"),
@@ -133,15 +127,10 @@ class TabWatcher:
                 is_busy = bool(cmd and classified and classified["category"] != "idle")
 
                 if is_busy and classified:
-                    s_cwd = None
-                    if fg_pid > 0:
-                        try:
-                            s_cwd = os.readlink(f"/proc/{fg_pid}/cwd")
-                        except Exception:
-                            pass
                     kterm = KonsoleTerminal(
                         service=s["service"], session_path=s["session_path"]
                     )
+                    s_cwd = kterm.get_cwd()
                     title = self.composer.compose(
                         session_key=s_key,
                         task_category=classified["category"],

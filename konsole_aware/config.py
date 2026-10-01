@@ -42,6 +42,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "always_show_job": True,
     "job_name_source": "auto",       # "auto" (git root or cwd), "git", "cwd"
+    "show_subfolder_in_title": True, # Append subfolder e.g. [🧪 myproject/tests]
+    "enable_project_icons": True,    # Display auto-detected or assigned folder/project icons
+    "enable_badge_icons": True,      # Prefix folder/project icon next to top-right badge text
+    "default_icon": "📁",            # Fallback icon if no specific folder/project icon matched
+    "folder_icons": {},              # Custom user folder name -> icon overrides
+    "project_file_icons": {},        # Custom user project file marker -> icon overrides
     "show_task_dot": True,
     "tab_color_mode": "status",      # "status", "task", "both"
     "task_dots": {

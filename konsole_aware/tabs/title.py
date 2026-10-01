@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 from konsole_aware.config import load_config
 from konsole_aware.state.manager import StateManager
 from konsole_aware.tabs.groups import TabGroupManager
+from konsole_aware.tabs.icons import IconResolver
 
 DEFAULT_TASK_DOTS = {
     "agent": "🟣",
@@ -55,6 +56,7 @@ class TitleComposer:
         self.config = load_config()
         self.state_mgr = StateManager()
         self.group_mgr = TabGroupManager()
+        self.icon_resolver = IconResolver()
 
     def get_job_name(
         self,
@@ -78,7 +80,24 @@ class TitleComposer:
             except Exception:
                 return "term"
 
-        return find_project_name(cwd)
+        try:
+            cur = Path(cwd or ".").resolve()
+        except Exception:
+            return "term"
+
+        root = self.icon_resolver.find_project_root(cur)
+        root_name = root.name if root.name not in ("", "/", "root") else "root"
+
+        if self.config.get("show_subfolder_in_title", True) and cur != root:
+            try:
+                rel = cur.relative_to(root)
+                if rel.parts:
+                    sub = rel.parts[0] if len(rel.parts) == 1 else f"{rel.parts[0]}/{rel.parts[-1]}"
+                    return f"{root_name}/{sub}"
+            except ValueError:
+                pass
+
+        return root_name
 
     def get_task_dot(self, task_category: str) -> str:
         """Get the colored dot emoji for the task category."""
@@ -99,17 +118,25 @@ class TitleComposer:
         status: str = "busy",
         detail: str = "",
         cwd: Optional[str] = None,
+        icon: Optional[str] = None,
     ) -> str:
         """
         Compose full tab title:
-        Example: [konsole_aware] 🟣 🧠 agy: thinking...
-        Example: [konsole_aware] 🟠 ⏳ rsync -> backup
-        Example: [konsole_aware] 🟡 ✅ cargo build (42s)
+        Example: [🐍 konsole_aware] 🟣 🧠 agy: thinking...
+        Example: [🧪 konsole_aware/tests] 🟣 🛠️ agy: cmd(...)
+        Example: [🟠 rsync] ⏳ rsync -> backup
+        Example: [🟡 cargo] ✅ cargo build (42s)
         """
         always_show_job = self.config.get("always_show_job", True)
         show_task_dot = self.config.get("show_task_dot", True)
+        enable_icons = self.config.get("enable_project_icons", True)
 
         resolved_job = self.get_job_name(session_key=session_key, cwd=cwd, explicit_job=job_name)
+        resolved_icon = (
+            self.icon_resolver.resolve(session_key=session_key, cwd=cwd, explicit_icon=icon)
+            if enable_icons
+            else ""
+        )
         task_dot = self.get_task_dot(task_category) if show_task_dot else ""
         status_icon = self.get_status_icon(status)
 
@@ -127,9 +154,14 @@ class TitleComposer:
                 g_name = grp["name"].capitalize()
                 parts.append(f"[{g_icon} {g_name}]".strip() if g_icon else f"[{g_name}]")
 
-        # 3. Permanent Job / Project Context
-        if always_show_job and resolved_job:
-            parts.append(f"[{resolved_job}]")
+        # 3. Permanent Job / Project Context with Icon
+        if always_show_job and (resolved_job or resolved_icon):
+            if resolved_icon and resolved_job:
+                parts.append(f"[{resolved_icon} {resolved_job}]")
+            elif resolved_job:
+                parts.append(f"[{resolved_job}]")
+            elif resolved_icon:
+                parts.append(f"[{resolved_icon}]")
 
         # 4. Task Colored Dot
         if task_dot:

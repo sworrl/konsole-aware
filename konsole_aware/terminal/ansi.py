@@ -45,7 +45,7 @@ class AnsiTerminal(BaseTerminal):
     def reset_tab_color(self) -> bool:
         return False
 
-    def set_badge(self, text: str, enabled: bool = True) -> bool:
+    def set_badge(self, text: str, enabled: bool = True, icon: Optional[str] = None) -> bool:
         """No-op for generic ANSI."""
         return False
 

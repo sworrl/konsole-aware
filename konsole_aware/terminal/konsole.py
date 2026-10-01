@@ -7,6 +7,7 @@ import sys
 from typing import Any, Dict, List, Optional, Tuple
 from konsole_aware.terminal.base import BaseTerminal
 from konsole_aware.terminal.ansi import AnsiTerminal
+from konsole_aware.config import load_config
 
 
 class KonsoleTerminal(BaseTerminal):
@@ -17,6 +18,7 @@ class KonsoleTerminal(BaseTerminal):
         service: Optional[str] = None,
         session_path: Optional[str] = None,
     ):
+        self.config = load_config()
         self.qdbus_bin = shutil.which("qdbus") or shutil.which("qdbus-qt6") or shutil.which("qdbus-qt5")
         self.ansi = AnsiTerminal()
 
@@ -207,14 +209,51 @@ class KonsoleTerminal(BaseTerminal):
         )
         return res is not None
 
-    def set_badge(self, text: str, enabled: bool = True) -> bool:
+    def get_process_id(self) -> int:
+        """Get the PID of the shell running in this session."""
+        if not self.is_available():
+            return -1
+        pid_str = self._dbus_call(self.service, self.session_path, "org.kde.konsole.Session.processId")
+        try:
+            return int(pid_str or -1)
+        except ValueError:
+            return -1
+
+    def get_cwd(self) -> str:
+        """Get the current working directory of the shell running in this session."""
+        pid = self.get_process_id()
+        if pid > 0:
+            try:
+                return os.readlink(f"/proc/{pid}/cwd")
+            except Exception:
+                pass
+        return os.getcwd()
+
+    def set_badge(self, text: str, enabled: bool = True, icon: Optional[str] = None) -> bool:
         if not self.is_available():
             return False
+
+        final_text = text
+        if enabled and text:
+            if icon:
+                final_text = f"{icon} {text}".strip()
+            elif self.config.get("enable_badge_icons", True):
+                try:
+                    from konsole_aware.tabs.icons import IconResolver
+                    resolver = IconResolver()
+                    s_key = self.get_session_id()
+                    s_cwd = self.get_cwd()
+                    auto_icon = resolver.resolve(session_key=s_key, cwd=s_cwd)
+                    if auto_icon and not text.startswith(auto_icon):
+                        final_text = f"{auto_icon} {text}".strip()
+                except Exception:
+                    pass
+
         self._dbus_call(
             self.service,
             self.session_path,
             "org.kde.konsole.Session.setBadgeText",
-            text,
+            final_text,
         )
         res = self._dbus_call(
             self.service,
