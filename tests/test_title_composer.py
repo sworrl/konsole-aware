@@ -13,8 +13,8 @@ class TestTitleComposer(unittest.TestCase):
 
     def test_find_project_name(self):
         # Current repo should resolve to konsole_aware
-        name = find_project_name(".")
-        self.assertEqual(name, "konsole_aware")
+        repo_root = Path(__file__).resolve().parent.parent
+        self.assertEqual(find_project_name(str(repo_root / "tests")), repo_root.name)
 
     def test_compose_with_job_and_task_dot(self):
         title = self.composer.compose(

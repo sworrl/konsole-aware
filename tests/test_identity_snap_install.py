@@ -151,3 +151,14 @@ class TestInstallMerge(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestQuietCategories(unittest.TestCase):
+    def test_editor_exit_does_not_notify(self):
+        StateManager().clear_session(KEY)
+        with mock.patch("konsole_aware.cli.Notifier") as notifier:
+            cli.main(["preexec", "--id", "7", "--shell-pid", "42", "--", "vim notes.md"])
+            StateManager().set_session(KEY, start_time=0)  # pretend it ran for ages
+            cli.main(["precmd", "--id", "7", "--shell-pid", "42", "0"])
+        notifier.assert_not_called()
+        self.assertNotEqual(StateManager().get_session(KEY).get("status"), "busy")

@@ -56,6 +56,20 @@ def konsole_title_text(title: str) -> str:
 _DISCOVERY_CACHE: Dict[int, Tuple[str, str]] = {}
 
 
+def badge_text(text: str) -> str:
+    """Badge-safe text. Konsole sizes the badge box with the (bold) terminal font's metrics,
+    but emoji are drawn from a wider fallback font, so any emoji makes the text overflow and
+    get cut off. Keep letters, digits, punctuation and the middle dot; drop pictographs."""
+    import unicodedata
+    out = []
+    for ch in sanitize(text):
+        if ch in "·•":
+            out.append(ch)
+        elif ord(ch) < 0x2000 or unicodedata.category(ch)[0] in ("L", "N"):
+            out.append(ch)
+    return " ".join("".join(out).split())
+
+
 class KonsoleTerminal(BaseTerminal):
     """Deep integration controller for KDE Konsole via D-Bus."""
 
@@ -202,7 +216,7 @@ class KonsoleTerminal(BaseTerminal):
                 except Exception:
                     pass
 
-        self._call("setBadgeText", sanitize(final_text) if enabled else "")
+        self._call("setBadgeText", badge_text(final_text) if enabled else "")
         res = self._call("setBadgeEnabled", "true" if enabled else "false")
         return res is not None
 

@@ -17,9 +17,10 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+from konsole_aware.agents import identity as agent_identity
 from konsole_aware.agents.base import BaseAgentHandler, short
 
 # Canonical event names, accepting snake_case aliases.
@@ -159,13 +160,33 @@ def find_usage_limit(text: Any) -> Optional[str]:
     return f"{m.group('what').strip()} limit" + (f" · resets {when}" if when else "")
 
 
+def latest_model_effort(path: Any, max_bytes: int = 131072) -> Tuple[Optional[str], Optional[str]]:
+    """(model, effort) of the newest real assistant entry in a transcript."""
+    if not isinstance(path, str) or not path:
+        return None, None
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - max_bytes))
+            lines = f.read().decode("utf-8", errors="ignore").splitlines()
+    except OSError:
+        return None, None
+    for line in reversed(lines):
+        if '"assistant"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        msg = entry.get("message") if isinstance(entry, dict) and isinstance(entry.get("message"), dict) else {}
+        model = msg.get("model")
+        if entry.get("type") == "assistant" and model and model != "<synthetic>":
+            return model, entry.get("effort")
+    return None, None
+
+
 def short_model(model: Any) -> str:
-    """claude-opus-4-8-20260101 -> Opus 4.8"""
-    text = str(model or "")
-    m = re.match(r"claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?", text)
-    if m:
-        return f"{m.group(1).capitalize()} {m.group(2)}" + (f".{m.group(3)}" if m.group(3) else "")
-    return short(text, 18)
+    return agent_identity.short_model(model)
 
 SESSION_START_DETAIL = {
     "startup": "ready",
@@ -206,6 +227,7 @@ class ClaudeHandler(BaseAgentHandler):
             return {}
         if payload.get("transcript_path") and payload["transcript_path"] != before.get("transcript_path"):
             self.state_mgr.set_session(self.session_key, transcript_path=payload["transcript_path"])
+        self._track_model(event, payload, before)
         prev = before.get("agent_status") or before.get("status")
         in_subagent = bool(payload.get("agent_id")) and self._subagent_count() > 0
         if before.get("new_agent"):
@@ -245,6 +267,13 @@ class ClaudeHandler(BaseAgentHandler):
                                f"{self.session_label()} ({project})", dedupe_key=f"switch:{to_model}")
                 else:
                     self.render("thinking", f"switched: {from_model} → {to_model}", cwd=cwd, mode=mode)
+            else:
+                # /model or picker switch: redraw the current state with the new model tag.
+                sess = self.state_mgr.get_session(self.session_key)
+                status = sess.get("agent_status") or "idle"
+                self.render(status if status in ("thinking", "tool", "subagents", "compacting", "waiting", "done",
+                                                 "error", "blocked", "limited", "idle") else "idle",
+                            sess.get("detail") or "ready", cwd=cwd, mode=mode)
 
         elif event == "PreToolUse":
             tool = payload.get("tool_name") or "tool"
@@ -388,6 +417,29 @@ class ClaudeHandler(BaseAgentHandler):
                    f"{self.session_label()} ({project}). Often a false positive: rephrase, switch "
                    "model (/model), or start a new session.",
                    urgency="critical", is_error=True, dedupe_key=f"blocked:{category}")
+
+    def _track_model(self, event: str, payload: Dict[str, Any], before: Dict[str, Any]) -> None:
+        """Keep the tab's model and effort current (shown as e.g. '💎 Fable 5.1·hi')."""
+        if payload.get("agent_id"):
+            return  # subagents may run other models; the tab shows the main session's
+        model = effort = None
+        if event == "SessionStart":
+            model = payload.get("model")
+        elif event == "PostModelSwitch":
+            model = payload.get("to_model")
+        if event in ("SessionStart", "UserPromptSubmit", "Stop", "StopFailure") and not model:
+            t_model, t_effort = latest_model_effort(payload.get("transcript_path"))
+            model, effort = t_model, t_effort
+        env_effort = os.environ.get("CLAUDE_EFFORT")
+        if env_effort:
+            effort = env_effort
+        updates: Dict[str, Any] = {}
+        if model and model != before.get("model"):
+            updates["model"] = model
+        if effort and effort != before.get("effort"):
+            updates["effort"] = effort
+        if updates:
+            self.state_mgr.set_session(self.session_key, **updates)
 
     def _render_limited(self, limit: str, cwd: str, mode: Optional[str], project: str) -> None:
         self.state_mgr.finish_task(self.session_key, exit_code=1, status="limited")

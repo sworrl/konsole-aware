@@ -395,3 +395,52 @@ class TestDistinctAgentColors(unittest.TestCase):
         self.assertIn("🟠", term_claude.titles[-1])
         self.assertIn("✳️ CLAUDE", term_claude.titles[-1])
 
+
+
+class TestModelEffort(unittest.TestCase):
+    def setUp(self):
+        StateManager().clear_session(KEY)
+        self.term = RecordingTerminal()
+        self.claude = ClaudeHandler(term=self.term)
+
+    def test_session_start_model_and_env_effort(self):
+        with mock.patch.dict("os.environ", {"CLAUDE_EFFORT": "high"}):
+            self.claude.handle_event("SessionStart", {"cwd": "/tmp", "source": "startup", "model": "claude-fable-5-1"})
+        self.assertIn("💎 Fable 5.1·hi", self.term.titles[-1])
+        self.assertIn("Fable 5.1", self.term.badges[-1][0])
+
+    def test_model_switch_updates_tag(self):
+        self.claude.handle_event("SessionStart", {"cwd": "/tmp", "model": "claude-fable-5-1"})
+        self.claude.handle_event("PostModelSwitch", {"cwd": "/tmp", "source": "command",
+                                                     "from_model": "claude-fable-5-1", "to_model": "claude-opus-5-5"})
+        self.assertIn("Opus 5.5", self.term.titles[-1])
+        self.assertNotIn("Fable", self.term.titles[-1])
+
+    def test_model_from_transcript(self):
+        import tempfile
+        f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        f.write(json.dumps({"type": "assistant", "effort": "max",
+                            "message": {"model": "claude-opus-5-5", "content": []}}) + "\n")
+        f.close()
+        with mock.patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop("CLAUDE_EFFORT", None)
+            self.claude.handle_event("UserPromptSubmit", {"cwd": "/tmp", "transcript_path": f.name})
+        self.assertIn("Opus 5.5·max", self.term.titles[-1])
+
+
+class TestUiThrottle(unittest.TestCase):
+    def test_tool_churn_is_throttled_and_state_changes_are_not(self):
+        StateManager().clear_session(KEY)
+        term = RecordingTerminal()
+        claude = ClaudeHandler(term=term)
+        claude.handle_event("UserPromptSubmit", {"cwd": "/tmp"})
+        n = len(term.titles)
+        for i in range(5):
+            claude.handle_event("PreToolUse", {"cwd": "/tmp", "tool_name": "Read", "tool_input": {"file_path": f"/f{i}"}})
+        self.assertEqual(len(term.titles), n + 1)  # first tool title only; the rest within 1 s are skipped
+        claude.handle_event("Stop", {"cwd": "/tmp", "last_assistant_message": "done"})
+        self.assertIn("ready", term.titles[-1])
+        colors = len(term.colors)
+        claude.handle_event("Notification", {"cwd": "/tmp", "notification_type": "idle_prompt"})
+        self.assertEqual(len(term.colors), colors)  # nothing re-sent when nothing changed

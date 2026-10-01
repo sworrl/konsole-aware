@@ -107,7 +107,8 @@ class BaseAgentHandler(ABC):
                 agent_pid and sess.get("agent_pid") != agent_pid
             )
             if new_agent:
-                updates.update({"agent_started_at": time.time(), "subagents": [], "status": "idle"})
+                updates.update({"agent_started_at": time.time(), "subagents": [], "status": "idle",
+                                "model": None, "effort": None})
                 before["status"] = "idle"
             before["new_agent"] = bool(new_agent)
             return updates
@@ -170,8 +171,6 @@ class BaseAgentHandler(ABC):
             agent=self.agent_name,
             mode=mode,
         )
-        self.term.set_title(title, role=0)
-
         color_key, badge = STATUS_STYLE.get(color_status or status, STATUS_STYLE["busy"])
         colors = self.config.get("colors", {})
         color = colors.get(color_key, "#f59e0b")
@@ -181,9 +180,34 @@ class BaseAgentHandler(ABC):
             color = ident.get("color", color)
         elif tab_mode == "agent_status" and color_key not in ("waiting", "error", "blocked", "limited", "done"):
             color = ident.get("color", color)
-        self.term.set_tab_color(color)
-        self.term.set_badge(f"{ident.get('label', '')} · {badge}", enabled=True, icon=ident.get("icon", ""))
+        sess = self.state_mgr.get_session(self.session_key)
+        m_tag = agent_identity.model_tag(sess.get("model"), sess.get("effort"))
+        label = f"{ident.get('label', '')} {m_tag}".strip()
+        badge_text = f"{label} · {badge}"
+        self._apply_ui(sess, status, title, color, badge_text, ident.get("icon", ""))
         return title
+
+    # Tool-call titles change several times a second while an agent works. Each change on
+    # a window's active tab also changes the window title, which the Plasma taskbar
+    # re-renders, so routine "busy" detail updates are throttled and unchanged values
+    # are never re-sent. State changes (waiting/done/error/...) always go through.
+    _THROTTLED = ("tool",)
+
+    def _apply_ui(self, sess: Dict[str, Any], status: str, title: str, color: str, badge: str, icon: str) -> None:
+        last = sess.get("ui") or {}
+        now = time.time()
+        min_gap = float(self.config.get("title_update_min_interval", 1.0))
+        if (status in self._THROTTLED and last.get("status") == status
+                and now - last.get("at", 0) < min_gap and last.get("title") != title):
+            return  # same busy state, just a new tool detail: wait for the next one
+        if last.get("title") != title:
+            self.term.set_title(title, role=0)
+        if last.get("color") != color:
+            self.term.set_tab_color(color)
+        if last.get("badge") != badge:
+            self.term.set_badge(badge, enabled=True, icon=icon)
+        self.state_mgr.set_session(self.session_key, ui={
+            "status": status, "title": title, "color": color, "badge": badge, "at": now})
 
     def render_user_session(self, cwd: Optional[str] = None) -> None:
         """Show the tab as a plain user shell (no agent)."""
@@ -196,6 +220,7 @@ class BaseAgentHandler(ABC):
             agent=agent_identity.USER,
         )
         self.term.set_title(title, role=0)
+        self.state_mgr.set_session(self.session_key, ui=None)
         self.term.reset_tab_color()
         self.term.set_badge("", enabled=False)
 

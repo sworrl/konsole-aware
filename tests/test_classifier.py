@@ -110,3 +110,28 @@ class TestCommandClassifier(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class TestSpecialCategories(unittest.TestCase):
+    def setUp(self):
+        self.clf = CommandClassifier()
+
+    def test_categories(self):
+        cases = {
+            "ssh -p 2222 me@nas": ("remote", "ssh nas"),
+            "vim README.md": ("interactive", "vim README.md"),
+            "npm run dev": ("server", "npm run dev"),
+            "python3 -m http.server 9000": ("server", "http.server :9000"),
+            "tail -f /var/log/syslog": ("monitor", "tail syslog"),
+            "journalctl -fu nginx": ("monitor", "journalctl nginx"),
+            "htop": ("monitor", "htop"),
+            "python3": ("interactive", "python3"),
+        }
+        for cmd, (cat, detail) in cases.items():
+            r = self.clf.classify(cmd)
+            self.assertEqual((r["category"], r["detail"]), (cat, detail), cmd)
+
+    def test_not_misclassified(self):
+        self.assertEqual(self.clf.classify("python3 train.py")["category"], "command")
+        self.assertEqual(self.clf.classify("cat latest.txt")["category"], "command")
+        self.assertEqual(self.clf.classify("tail -n 5 log.txt")["category"], "command")

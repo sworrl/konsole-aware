@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-22.04   # last runner image with Python 3.8 available
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.8", "3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install pytest
+      - run: python -m pytest -q
+      - name: Shell integration syntax
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq zsh >/dev/null
+          bash -n shell/konsole-aware.bash
+          zsh -n shell/konsole-aware.zsh
+
+  menu-hook:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt 6 headers
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qt6-base-dev pkg-config g++ make >/dev/null
+      - run: make -C menu_hook
+      - name: Only the QMenu::exec interposer is exported
+        run: test "$(nm -D --defined-only menu_hook/libkonsole_aware_menu.so | grep -c ' T ')" = 1

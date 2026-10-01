@@ -33,6 +33,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # sticky_alerts is true (then permission/question/blocked alerts stay until dismissed).
     "notification_timeout_seconds": 4,
     "sticky_alerts": False,
+    "title_update_min_interval": 1.0,   # seconds between busy tool-detail title updates per tab
+    "notification_burst": 4,             # at most this many toasts ...
+    "notification_window_seconds": 20,   # ... per this many seconds (all tabs combined)
     "colors": {
         "busy": "#f59e0b",       # Amber: active execution / thinking / transfer
         "done": "#10b981",       # Emerald: task finished / ready
@@ -70,7 +73,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Agent identity: every tab shows which agent runs in it (✳️ CLAUDE, 🪐 AGY, ...)
     # or 👤 USER when it is a plain shell with no agent.
     "show_agent_identity": True,
-    "show_agent_mode": True,         # Show permission / execution mode (📋 PLAN, ✏️ EDITS, ⚡ BYPASS, ...)
+    "show_agent_mode": True,
+    "show_agent_model": True,        # Show model and effort (💎 Fable 5.1·hi, Opus 5.5·max, ...)
+    "model_icons": {},               # e.g. {"fable": "💎", "opus": "🟣"}; "" hides the icon         # Show permission / execution mode (📋 PLAN, ✏️ EDITS, ⚡ BYPASS, ...)
     "agent_identities": {},          # Per-agent overrides: {"claude": {"icon": "✳️", "label": "CLAUDE"}}
     "agent_order": ["claude", "agy", "gemini", "codex", "aider", "copilot", "cursor", "opencode"],
     # Snapping: when an agent starts in a tab, move that tab next to the other tabs
@@ -91,6 +96,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "container": "🟦",
         "archive": "📦",
         "package": "🟦",
+        "remote": "🟪",
+        "server": "🟩",
+        "monitor": "👀",
+        "interactive": "✏️",
         "command": "⚪",
         "idle": "⚫",
     },

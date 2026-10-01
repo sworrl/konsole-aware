@@ -177,6 +177,10 @@ class TitleComposer:
         show_user_tag = self.config.get("show_user_identity", False)
         if show_identity and (is_agent or show_user_tag or task_category == "idle"):
             parts.append(agent_identity.identity_tag(agent))
+        if is_agent:
+            m_tag = agent_identity.model_tag(sess.get("model"), sess.get("effort"))
+            if m_tag:
+                parts.append(m_tag)
         if show_mode and is_agent:
             tag = agent_identity.mode_tag(mode)
             if tag:

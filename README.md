@@ -1,482 +1,647 @@
 # konsole-aware
 
-Tab title, taskbar, color, and alert awareness for KDE Konsole and Linux terminal emulators.
+konsole-aware puts the state of your AI coding agents and long shell jobs into KDE Konsole's tab titles, tab colors
+and badges. Each tab says which agent is in it (Claude Code, Antigravity, Gemini, Codex and others), which model and
+effort that agent is on, and whether it is working, done, or waiting on you. A plain shell says it is a plain shell.
 
-`konsole-aware` tracks AI coding agents (`agy`, `claude`, `aider`, `copilot`), file transfers (`rsync`, `scp`, `curl`, `wget`, `rclone`), compilations (`cargo`, `make`, `npm`), and long-running shell commands. It updates tab titles and taskbar entries in real time, colors tabs based on execution state, displays badges, and dispatches desktop notifications with audio alerts when tasks finish in unfocused tabs.
+![Konsole tab bar with one Claude tab and one agy tab per project, each showing model, mode, project and state](docs/screenshots/tab-bar.png)
 
-## Features
+That screenshot is three projects with a Claude tab and an agy tab each. The `storefront` Claude tab is editing a
+file, the agy tab next to it finished in 42 seconds, and the `api-gateway` Claude tab is in plan mode on Fable 5.1 at
+max effort, waiting for its plan to be approved.
 
-- **Agent Identity on Every Tab**: Each tab says who is in it: `✳️ CLAUDE`, `🪐 AGY` (also `♊ GEMINI`, `🧩 CODEX`, `🤝 AIDER`, ...) or `👤 USER` when no agent is running. The identity comes first in the title, so it survives Konsole eliding long tab titles, and is repeated in the top-right badge (`✳️ CLAUDE · THINK`).
-- **Agent Lifecycle Integration**: Hooks into Claude Code (`claude`) and Antigravity (`agy`) and shows exact states: thinking, tool use (`Bash(cargo test)`, `edit(main.py)`), waiting for permission, questions, plan ready, subagents, compaction, done, failed, and back to `👤 USER` when the agent exits. The hooks are purely observational: they never approve or block tool calls.
-- **Agent Modes**: Claude Code permission modes (`📋 PLAN`, `✏️ EDITS`, `🤖 AUTO`, `🔕 DONT-ASK`, `⚡ BYPASS`; default shows nothing) and agy modes (`--mode plan|accept-edits`, `--dangerously-skip-permissions`) appear next to the identity.
-- **Project Snapping**: When `claude` and `agy` run in the same project, their tabs are snapped side by side automatically (and `konsole-aware snap` tidies whole windows: one cluster per project, agents first).
-- **Permanent Job / Project Context**: Tab titles permanently display the active project or directory context (`[{job_name}]`) resolved from the Git repository root or directory, overridable with `konsole-aware set-job`.
-- **Dual Simultaneous Color-Coding**:
-  - Task category is displayed as a colored dot in the tab title (`🟣` Agent, `🟠` Transfer, `🟡` Build, `🟢` Test, `🔵` VCS, `🟤` Download).
-  - Execution state is displayed as the physical Konsole tab background color (Amber `#f59e0b` active, Emerald `#10b981` completed, Red `#ef4444` failed, Purple `#8b5cf6` awaiting user input).
-- **KDE Konsole DBus Control**:
-  - Sets tab title (`Session.setTitle 0`) and window title / taskbar entry (`Session.setTitle 1`).
-  - Colors tabs: Amber (`#f59e0b`) while active, Emerald Green (`#10b981`) upon completion, Red (`#ef4444`) on failure, and Purple (`#8b5cf6`) when user input or permission is required.
-  - Draws badges (`Session.setBadgeText`, `Session.setBadgeEnabled`).
-- **Tab Right-Click Context Menu Integration**: Extends Konsole's native tab context menu with settings for tab colors, pinning, grouping, custom icons, view splits, organizing, and **Send Tab To...** (sending the tab to any other open Konsole window or detaching into a new window).
-- **Secondary Terminal Support**: Writes standard ANSI OSC sequences (OSC 0, OSC 1, OSC 2, OSC 30, OSC 777, OSC 9) for foot, kitty, wezterm, alacritty, tmux, and xterm.
-- **Smart Focus-Aware Alerts**: Sends desktop notifications via `notify-send` and plays audio via `paplay`, `pw-play`, or `aplay`. If you are already looking at the tab, loud alerts can stay silent while the tab title updates.
-- **Task Recognition**: Classifies commands automatically from shell hooks (`zsh` and `bash`) without requiring command wrappers.
-- **Live Tab Dashboard**: `konsole-aware list` lists all active tabs across all Konsole windows with foreground processes, active focus, and elapsed runtimes.
-- **Tab Switching**: `konsole-aware switch <tab_num>` brings any Konsole tab into immediate focus.
-- **Optional Background Daemon**: Runs via systemd or terminal to observe background tabs even when shell hooks are bypassed.
+## Contents
 
-## Installation
+- [What it does](#what-it-does)
+- [Install](#install)
+- [Set up your user](#set-up-your-user)
+- [Reading a tab](#reading-a-tab)
+- [Commands](#commands)
+- [Tab right-click menu](#tab-right-click-menu)
+- [Configuration](#configuration)
+- [Environment variables](#environment-variables)
+- [How it works](#how-it-works)
+- [Testing](#testing)
+- [Building the packages](#building-the-packages)
+- [Updating](#updating)
+- [Troubleshooting](#troubleshooting)
+- [Uninstall](#uninstall)
+- [Contributing](#contributing)
+- [License](#license)
 
-Run the installation script:
+## What it does
+
+- Starts every tab title with the agent in it (`CLAUDE`, `AGY`, `GEMINI`, `CODEX`, `AIDER` and a few more), or `USER`
+  when no agent is running.
+- Shows the model and effort next to it (`Fable 5.1·max`, `Opus 5.5·hi`) and keeps them current when you switch with
+  `/model` or `/effort`, or when Claude Code switches on its own.
+- Shows the permission mode for all six Claude Code modes (plan, acceptEdits, auto, dontAsk, bypassPermissions,
+  default) and agy's `--mode` and `--dangerously-skip-permissions`.
+- Tracks 18 Claude Code hook events and the four agy hook events: thinking, running a tool, subagents, compacting,
+  waiting for your answer, done, failed.
+- Has its own states for safeguard blocks and usage limits, so a blocked or rate-limited tab doesn't look finished.
+- Puts tabs of the same project next to each other (Claude first, then agy) and can merge them into one split tab.
+- Tracks ordinary shell commands too: builds, tests, transfers, package managers, ssh, dev servers, `tail -f`, with exit
+  codes and run times.
+- Sends a desktop notification when a tab you aren't looking at finishes or needs you, at most 4 per 20 seconds
+  across all tabs.
+
+It only watches. The agent hooks never approve, deny or change a tool call, and they never print anything into the
+agent's context.
+
+`konsole-aware list` shows the same information as a table:
+
+![konsole-aware list output: one row per tab with agent, model, mode, project, state and duration](docs/screenshots/dashboard.png)
+
+## Install
+
+You need KDE Konsole 24.02 or newer and Python 3.8 or newer. It's tested on Konsole 26.08 with Plasma 6 on Wayland.
+
+### One line
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/sworrl/konsole-aware/HEAD/get.sh | bash
+```
+
+This clones the repo into `~/.local/share/konsole-aware` (or updates it if it's already there) and sets things up for
+your user. It needs `git` and `python3`. To build the right-click menu it also needs `g++`, `make` and the Qt 6
+headers; without them everything else still installs and the menu is skipped.
+
+To skip the menu on purpose:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sworrl/konsole-aware/HEAD/get.sh | bash -s -- --no-menu
+```
+
+### Debian, Ubuntu, KDE neon (.deb)
+
+Download the `.deb` from the [latest release](https://github.com/sworrl/konsole-aware/releases/latest), then:
+
+```bash
+sudo apt install ./konsole-aware_1.1.0_amd64.deb
+konsole-aware install
+```
+
+### Fedora (.rpm)
+
+Download the `.rpm` from the [latest release](https://github.com/sworrl/konsole-aware/releases/latest), then:
+
+```bash
+sudo dnf install ./konsole-aware-1.1.0-1.*.x86_64.rpm
+konsole-aware install
+```
+
+The packages put the program in `/usr/lib/konsole-aware` with the right-click menu already built, so no compiler is
+needed. A package can't edit your shell config or your Claude Code settings, so each user runs `konsole-aware install`
+once after installing it.
+
+### From source
+
+```bash
+git clone https://github.com/sworrl/konsole-aware.git
+cd konsole-aware
 ./install.sh
 ```
 
-Or invoke the CLI installer:
+The clone is the install (the installer links to it), so keep it somewhere it can stay.
 
-```bash
-python3 bin/konsole-aware install
-```
+### Optional extras
 
-The installer performs these steps (re-running it is safe):
-1. Links `bin/konsole-aware` to `~/.local/bin/konsole-aware`.
-2. Registers a `konsole-aware` hook in `~/.gemini/config/hooks.json` for Antigravity (`agy`).
-3. Merges hooks for every Claude Code lifecycle event into `~/.claude/settings.json`, keeping your existing hooks (a `.konsole-aware.bak` backup is written first).
-4. Sources `shell/konsole-aware.zsh` in `~/.zshrc`.
-5. Sources `shell/konsole-aware.bash` in `~/.bashrc`.
-6. Builds the tab context-menu hook and a `~/.local/bin/konsole` wrapper that loads it (skip with `install --no-menu`).
+| Package | What it's for |
+| :--- | :--- |
+| `python3-gi` (Debian/Ubuntu), `python3-gobject` (Fedora) | Fast D-Bus. Without it every call to Konsole starts a `qdbus6` process |
+| `libnotify-bin` / `libnotify` | Desktop notifications (`notify-send`) |
+| `pulseaudio-utils` or `pipewire-bin` | Notification sounds (`paplay` or `pw-play`) |
+| `g++`, `make`, `qt6-base-dev` / `qt6-qtbase-devel` | Building the right-click menu from source |
 
-Reload your shell or open a new terminal tab:
+## Set up your user
 
-```bash
-source ~/.zshrc
-```
+`konsole-aware install` (which `install.sh` and the one-line installer run for you) does this:
 
-## CLI Usage
+| File | Change |
+| :--- | :--- |
+| `~/.claude/settings.json` | Adds konsole-aware's hooks for 18 Claude Code events. Your other hooks stay, and the original file is copied once to `settings.json.konsole-aware.bak` |
+| `~/.gemini/config/hooks.json` | Adds a `konsole-aware` hook group for agy. Other groups stay |
+| `~/.zshrc`, `~/.bashrc` | Adds one line each, tagged `# konsole-aware`, that loads the shell integration |
+| `~/.local/bin/konsole-aware` | Link to the program (source and one-line installs only) |
+| `~/.local/lib/libkonsole_aware_menu.so`, `~/.local/bin/konsole`, `~/.local/share/applications/org.kde.konsole.desktop` | The right-click menu library, a launcher that loads it, and a desktop entry that uses the launcher |
 
-### View Active Tabs
+Running it again replaces only its own entries.
 
-```bash
-konsole-aware list
-```
-
-Example output (tabs in visual order, with the agent running in each):
-```text
-  🔍 Konsole Aware - Tabs by Window (visual order)
-  ─────────────────────────────────────────────────────────────────────────────────────────────────────
-  WIN  TAB  ACT PIN AGENT              PROJECT              STATUS                       DURATION  GROUP
-  ─────────────────────────────────────────────────────────────────────────────────────────────────────
-  2    13   ●   -   ✳️ CLAUDE ⚡ BYPASS konsole_aware        tool: Bash(pytest -q)        1m 12s    -
-  2    9    ○   -   🪐 AGY ⚡ BYPASS    konsole_aware        done: ready in 41s           41s       -
-  2    7    ○   -   👤 USER            konsole_aware        Idle                         -         -
-  ─────────────────────────────────────────────────────────────────────────────────────────────────────
-```
-
-Output raw JSON:
-```bash
-konsole-aware list --json
-```
-
-### Agent Identity, Modes and States
-
-Every title starts with who is in the tab, then the mode (if any), the project, and the state:
+Expected output:
 
 ```text
-✳️ CLAUDE [🐍 konsole_aware] 🧠 thinking…
-✳️ CLAUDE 📋 PLAN [🐍 konsole_aware] ❓ plan ready for review
-🪐 AGY ⚡ BYPASS [🐍 konsole_aware] 🛠️ cmd(cargo test)
-👤 USER [🐍 konsole_aware] 🟡 ⏳ cargo build
-👤 USER [🐍 konsole_aware] 💤
+✓ Installed binary: /home/you/.local/bin/konsole-aware
+✓ Configured Antigravity lifecycle hooks: /home/you/.gemini/config/hooks.json
+✓ Configured Claude Code hooks (18 events): /home/you/.claude/settings.json
+✓ Added shell integration to /home/you/.zshrc
+✓ Installed context menu hook library: /home/you/.local/lib/libkonsole_aware_menu.so
+✓ Installed konsole wrapper with menu hook: /home/you/.local/bin/konsole
+✓ Installed desktop application entry: /home/you/.local/share/applications/org.kde.konsole.desktop
 ```
 
-Claude Code events handled: `SessionStart` (startup/resume/clear/compact), `UserPromptSubmit`, `PreToolUse`
-(incl. `AskUserQuestion` and `ExitPlanMode`), `PermissionRequest`, `PermissionDenied`, `PostToolUse`,
-`PostToolUseFailure` (incl. interrupts), `PostModelSwitch`, `Notification` (`permission_prompt`, `idle_prompt`, `elicitation_dialog`),
-`Elicitation`/`ElicitationResult`, `SubagentStart`/`SubagentStop`, `PreCompact`/`PostCompact`, `Stop`,
-`StopFailure`, and `SessionEnd`. Antigravity events handled: `PreInvocation`, `PreToolUse` (incl. `ask_question`),
-`PostToolUse`, and `Stop` (with `terminationReason`).
+Then:
 
-**Safeguard blocks.** When Claude's safeguards flag a request (often a false positive on legitimate security or
-systems work), the tab says so instead of looking finished or generically failed:
+1. Quit every Konsole window and start Konsole again from the app launcher. The right-click menu only loads when
+   Konsole starts from the launcher. A Konsole that Plasma restores at login starts without it.
+2. Open a new tab, or run `source ~/.zshrc` in the ones you have open.
+3. Start `claude` or `agy` in a project. The tab should change to `CLAUDE …` or `AGY …` at the first prompt.
+4. Run `konsole-aware list` to see every tab.
 
-- Hard block (`API Error: …'s safeguards flagged this message`): `✳️ CLAUDE [proj] 🛡️ blocked by safeguards [cyber] · rephrase or /model`, pink tab, `BLOCKED` badge, and a desktop alert.
-- Automatic model switch after a flag ("Switch models when a message is flagged"): `🛡️ flagged [cyber]: Fable 5.1 → Opus 4.8` while it keeps working, and `ready in 2m 3s · 🛡️ on Opus 4.8` when done.
-- Model switches for other reasons (overload, unavailable) show as `switched: A → B` without the shield.
+## Reading a tab
 
-Detection uses the `StopFailure`/`Stop`/`PostModelSwitch` hook payloads plus the current turn's transcript entries
-(`stop_reason: "refusal"`, `stop_details.category`), so a reply that merely talks about safeguards is not mistaken for a block.
-
-**Waiting means you can answer now.** `❓ waiting` (purple) only appears while a question, plan approval, or
-permission prompt is open. A finished turn stays `✅ ready` even if Claude's last message asked you something.
-
-**Turn ends no hook reports.** Pressing Esc in Claude Code fires no `Stop` hook, and agy has no exit hook. A small
-per-tab watcher (started at each turn, exits when it ends) and every `list`/`watch`/`daemon` scan close such turns:
-Claude's transcript shows `[Request interrupted by user…]` (→ `interrupted`) or a `turn_duration` record
-(→ `ready in …`), and an agent process that exited returns the tab to `👤 USER`. Disable with `"agent_watchdog": false`.
-
-### Package Managers and System Updates
-
-Package managers (`apt`, `apt-get`, `nala`, `pacman`, `dnf`, `zypper`, `snap`, `flatpak`, `brew`) and system updates (including `sudo apt-get update`, `sudo apt full-upgrade`, `pacman -Syu`) are automatically classified with dedicated action icons, badges, and progress tracking:
-
-- **Repository update** (`sudo apt-get update`, `pacman -Sy`): `[proj] 🔄 apt update`, `UPDT` badge, and sky blue tab color.
-- **System upgrade** (`sudo apt full-upgrade`, `pacman -Syu`): `[proj] ⬆️ apt full-upgrade`, `UPGR` badge.
-- **Package install** (`sudo apt install ripgrep`): `[proj] 📥 apt install ripgrep`, `INST` badge.
-- **Removal** (`sudo apt autoremove`): `[proj] 🗑️ apt autoremove`, `RM` badge.
-
-Sudo options (such as `sudo -E`, `sudo -u`, or environment variables) are parsed transparently so the command target and action are always recognized.
-
-### Glanceable Titles with Many Tabs
-
-When 10 or more tabs are open, Konsole shrinks each tab to 12-16 visible characters. To prevent tabs from degrading into identical `... ready in Xs` strings:
-
-- Redundant filler is removed: finished turns display `✅ ready (55s)` or `✅ 55s` instead of repeating `ready in ...`.
-- User tabs running active commands omit the redundant `👤 USER` prefix so the project and command remain visible.
-- Overlong project names are constrained by `"max_job_length": 16` so they do not crowd out status icons.
-- Konsole's tab bar hook sets `Qt::ElideRight` and enables tab scroll buttons so project and agent identities at the front of the tab are never truncated.
-
-Tab colors use `"tab_color_mode": "agent"` by default so each agent's tab is immediately glanceable and distinguishable (Claude terracotta `#d97757` with `🟠`, AGY electric blue `#4285f4` with `🔵`, Gemini purple `#8e75ff` with `🟣`, Codex green `#10a37f` with `🟢`). Urgent attention states override the color (purple for user input/permission, red for failure, orange for usage limit, pink for provider safeguard blocks). Set `"tab_color_mode": "status"` if you prefer uniform state-based colors across all agents, or `"agent_status"` to keep agent colors during execution and transition to emerald green when done.
-
-### Snapping Agent Tabs Together
-
-When an agent starts in the active tab, that tab moves next to the other tabs of the same project in its window
-(agents first, in `agent_order`: claude, then agy, ...). To tidy whole windows:
-
-```bash
-konsole-aware snap              # every window
-konsole-aware snap --window 2   # one window
-konsole-aware snap --dry-run    # show the resulting order without moving anything
-konsole-aware organize --by project   # same as snap
+```text
+✳️ CLAUDE 💎 Fable 5.1·max 📋 PLAN [🐹 api-gateway] ❓ plan ready for review
+└──┬────┘ └──────┬───────┘ └──┬──┘ └──────┬──────┘ └─────────┬───────────┘
+ agent      model·effort     mode      project            state and detail
 ```
 
-Projects are the Git root (or the nearest project marker below a workspace folder that holds many projects).
-Konsole cannot move tabs between windows over D-Bus; `snap` reports projects split across windows, and the tab
-menu's **Send Tab To...** moves them. Disable automatic snapping with `"auto_snap_agents": false`.
+A plain shell reads `👤 USER [🐍 konsole_aware] 💤` at the prompt, and shows the command while one runs
+(`[📦 storefront] 🟡 ⏳ cargo build`). The badge in the top right of the terminal repeats agent, model and state in
+plain text, like `CLAUDE Opus 5.5·hi · TOOL`.
 
-### Permanent Job and Project Context
+### Agent states
 
-Tab titles permanently display the repository or directory context with auto-detected or assigned icons:
-`✳️ CLAUDE [🐍 konsole_aware] 🧠 thinking…`
-`🪐 AGY [🧪 konsole_aware/tests] 🛠️ cmd(...)`
+| State | Shows | Tab color | Claude Code event | agy event |
+| :--- | :---: | :--- | :--- | :--- |
+| Ready | `💤` | agent color | `SessionStart` | |
+| Thinking | `🧠` | agent color | `UserPromptSubmit`, `PostToolUse` | `PreInvocation`, `PostToolUse` |
+| Running a tool | `🛠️` | agent color | `PreToolUse` | `PreToolUse` |
+| Subagents | `🤖` | agent color | `SubagentStart`, `SubagentStop` | |
+| Compacting | `🗜️` | agent color | `PreCompact`, `PostCompact` | |
+| Waiting on you | `❓` | purple | `AskUserQuestion`, `ExitPlanMode`, `PermissionRequest`, permission `Notification`, `Elicitation` | `ask_question` |
+| Done | `✅` | agent color | `Stop` | `Stop` |
+| Failed | `❌` | red | `StopFailure` | `Stop` with an error |
+| Blocked by safeguards | `🛡️` | pink | `StopFailure` or `Stop`, plus a refusal in the transcript | |
+| Usage limit | `⌛` | orange | `Stop` with "You've hit your … limit" | |
+| Interrupted | `❓` | agent color | Esc, read from the transcript | |
+| Agent exited | `USER` | default | `SessionEnd`, or the shell prompt coming back | the shell prompt coming back |
 
-Override the detected project name with a permanent custom job name and optional icon:
+Waiting only shows while a question, plan approval or permission prompt is actually open. If the agent finished and
+its last message happened to ask you something, the tab shows done.
 
-```bash
-# Set custom job name for the current tab
-konsole-aware set-job "Indexer"
+### Modes, models and effort
 
-# Set custom job name and icon together
-konsole-aware set-job "ETL-Pipeline" --icon "⚡" --tab 4
+| Claude Code `permission_mode` | Tag | | agy flag | Tag |
+| :--- | :--- | :-- | :--- | :--- |
+| `default` | none | | `--mode plan` | `📋 PLAN` |
+| `plan` | `📋 PLAN` | | `--mode accept-edits` | `✏️ EDITS` |
+| `acceptEdits` | `✏️ EDITS` | | `--dangerously-skip-permissions` | `⚡ BYPASS` |
+| `auto` | `🤖 AUTO` | | | |
+| `dontAsk` | `🔕 DONT-ASK` | | | |
+| `bypassPermissions` | `⚡ BYPASS` | | | |
 
-# Clear custom job name to revert back to auto Git/directory detection
-konsole-aware set-job --clear
-```
+Model names get shortened (`claude-opus-5-5` to `Opus 5.5`, `gemini-3-pro` to `Gemini 3 Pro`) and effort to `lo`,
+`med`, `hi`, `xhi` or `max`. Fable models get a diamond so you notice when you're burning through a Fable limit.
 
-### Folder & Project Icons (Tab Titles and Top-Right Badges)
+### Safeguard blocks and model switches
 
-Icons are automatically picked based on the folder you are in or your project's marker files, and rendered both in the tab title (`[🧪 myproject/tests]`) and next to the top-right Konsole badge (`🧪 THINK`, `🦀 TOOL`, `🐍 DONE`):
+| What happened | The tab shows |
+| :--- | :--- |
+| A safeguard stopped the turn ("API Error: …'s safeguards flagged this message") | `🛡️ blocked by safeguards [cyber] · rephrase or /model`, pink tab, `BLOCKED` badge, notification |
+| A safeguard flagged the request and Claude Code carried on with another model | `🛡️ flagged [cyber]: Fable 5.1 → Opus 4.8` while it works, then `ready (2m 3s) · 🛡️ on Opus 4.8` |
+| Claude Code switched models for some other reason (overload, unavailable) | `switched: A → B` |
 
-#### 1. Auto-Picked Icons
+Blocks come from the hook payload and the current turn's transcript entries (`stop_reason: "refusal"`,
+`stop_details.category`). A reply that just talks about safeguards doesn't count as a block.
 
-- **Subfolders in Project**:
-  - `frontend/`, `client/`, `ui/` -> `🎨`
-  - `backend/`, `server/`, `api/` -> `⚙️` or `🔌`
-  - `tests/`, `test/`, `spec/` -> `🧪`
-  - `docs/`, `doc/` -> `📚`
-  - `scripts/`, `bin/`, `tools/` -> `📜` or `🛠️`
-  - `infra/`, `terraform/`, `k8s/` -> `☁️` or `☸️`
-  - `docker/`, `compose/` -> `🐳`
-  - `mobile/`, `ios/`, `android/` -> `📱` or `🍎`
-  - `data/`, `models/`, `notebooks/` -> `📊` or `🧠`
+### Shell commands
 
-- **Project Root Marker Files**:
-  - `Cargo.toml` -> `🦀` (Rust)
-  - `pyproject.toml`, `requirements.txt`, `setup.py` -> `🐍` (Python)
-  - `package.json`, `tsconfig.json` -> `📦` or `🟦` (Node / TypeScript)
-  - `go.mod` -> `🐹` (Go)
-  - `pom.xml`, `build.gradle` -> `☕` (Java)
-  - `Makefile`, `CMakeLists.txt` -> `🛠️` (C / C++)
-  - `Dockerfile`, `docker-compose.yml` -> `🐳` (Docker)
-  - `.git` -> `🐙` (Git)
-
-#### 2. Top-Right Konsole Badge Integration
-
-Konsole's top-right badge displays the resolved icon directly next to the state text:
-- `🐍 THINK` (when agent is thinking)
-- `🐍 TOOL` (when agent is executing tools)
-- `🧪 TEST` (when test runner is executing)
-- `🦀 BLD` (when compilation is in progress)
-- `🐍 DONE` (when task finished successfully)
-- `🐍 ERR` (when task failed)
-- `📌 PIN` (when tab is pinned)
-
-#### 3. Assigning and Customizing Icons
-
-```bash
-# Assign custom icon to current tab (or --tab <num>)
-konsole-aware set-icon 🚀
-konsole-aware set-icon 🦀 --tab 4
-
-# Clear custom icon (reverts to auto folder/project detection)
-konsole-aware set-icon --clear
-
-# Inspect which icon and rule was auto-picked for a directory or tab
-konsole-aware icon
-konsole-aware icon --path ./tests
-
-# Configure custom folder name mappings in user config
-konsole-aware set-folder-icon contracts 📜
-
-# List all built-in and user folder and file icon mappings
-konsole-aware set-folder-icon --list
-```
-
-You can also drop a `.konsole-icon` file (containing an emoji like `🔥`) or a `.konsole-aware.json` file (`{"icon": "🔥"}`) into any project or subfolder to lock its icon.
-
-### Dual Color-Coding: Tasks vs Status
-
-`konsole-aware` displays both task category and execution status simultaneously.
-
-**Task Categories (Tab Title Dot):**
-
-| Category | Dot | Example Commands |
+| Kind | Examples | The tab shows |
 | :--- | :--- | :--- |
-| Agent | `🟣` | `agy`, `claude`, `aider` |
-| File Transfer | `🟠` | `rsync`, `scp`, `sftp`, `rclone` |
-| Download | `🟤` | `curl`, `wget`, `aria2c`, `yt-dlp` |
-| Build / Compile | `🟡` | `cargo build`, `make`, `ninja`, `cmake`, `npm run build` |
-| Test Runner | `🟢` | `cargo test`, `pytest`, `npm test`, `jest`, `vitest` |
-| Version Control | `🔵` | `git commit`, `git push`, `git rebase` |
-| Container | `🟦` | `docker`, `podman`, `kubectl` |
-| Archive | `📦` | `tar`, `zip`, `unzip`, `gzip` |
-| Shell Command | `⚪` | Generic commands |
-| Idle / Ready | `⚫` | Prompt awaiting command |
+| Build | `cargo build`, `make`, `ninja`, `npm run build` | `🟡 ⏳ cargo build` |
+| Test | `pytest`, `cargo test`, `go test`, `npm test`, `python -m pytest` | `🟢 ⏳ pytest -q` |
+| Transfer, download | `rsync`, `scp`, `rclone`, `curl`, `wget`, `yt-dlp` | `🟠 ⏳ rsync -> backup` |
+| Package manager | `apt`, `nala`, `dnf`, `pacman`, `zypper`, `snap`, `flatpak`, `brew` | `🟦 ⬆️ apt full-upgrade` |
+| Remote shell | `ssh`, `mosh`, `et` | `🔐 ssh nas` |
+| Dev server | `vite`, `uvicorn`, `flask`, `npm run dev`, `python -m http.server` | `🌐 http.server :8000` |
+| Monitor | `tail -f`, `journalctl -f`, `htop`, `btop`, `watch` | `👀 tail syslog` |
+| Interactive | `vim`, `nvim`, `less`, `lazygit`, `psql`, `python3` with no script | `✏️ vim notes.md` |
+| Git, containers, archives | `git`, `docker`, `kubectl`, `tar` | `🔵 ⏳ git rebase` |
 
-**Execution Status (Konsole Tab Background & Glyph):**
+Commands that take under 3 seconds just go back to the normal prompt title. Longer ones end as
+`✅ cargo build (1m 12s)` or `❌ pytest (exit 1)` and notify you if that tab isn't the one you're looking at.
+Quitting an editor, monitor, server or ssh session never notifies.
 
-| Status | Color | Tab Background | Glyph | Meaning |
-| :--- | :--- | :--- | :--- | :--- |
-| Busy / Running | Amber | `#f59e0b` | `⏳` / `🧠` / `🛠️` | Command or agent actively working |
-| Done / Success | Emerald | `#10b981` | `✅` | Process exited with code 0 |
-| Error / Failed | Red | `#ef4444` | `❌` | Process exited with non-zero code |
-| Waiting / Prompt | Purple | `#8b5cf6` | `❓` | Agent waiting for user answer or confirmation |
-| Idle | Blue | `#3b82f6` | `💤` | Shell sitting at prompt |
+## Commands
 
-### Tab Grouping
+Anything that acts on a tab uses the current tab unless you pass `--tab <session>`. From outside Konsole, also pass
+`--service`, for example `--service org.kde.konsole-1234`.
 
-Assign tabs to custom color-coded groups:
+### Looking
 
-```bash
-# Assign current tab (or --tab 9) to group 'agents' with purple color and icon
-konsole-aware group set agents --tab 9 --color "#8b5cf6" --icon "🤖"
+| Command | What it does |
+| :--- | :--- |
+| `konsole-aware list` | One row per tab, in tab order: agent, model, mode, project, state, run time, group |
+| `konsole-aware list --json` | Same, as JSON |
+| `konsole-aware list --service S` | Only one Konsole instance |
+| `konsole-aware watch` | `list`, updating every second |
+| `konsole-aware icon [--path DIR]` | Which icon a folder gets, and why |
 
-# Assign tab to 'backend' group
-konsole-aware group set backend --tab 4 --color "#3b82f6" --icon "⚙️"
+### Arranging tabs
 
-# Automatically group all open tabs by their active project directory
-konsole-aware group auto
+| Command | What it does |
+| :--- | :--- |
+| `konsole-aware snap` | In every window, puts tabs of the same project together, agents first |
+| `konsole-aware snap --window 2 --dry-run` | Prints the new order for window 2 without moving anything |
+| `konsole-aware organize --by status\|group\|name\|project\|id` | Sorts a window's tabs; pinned tabs stay at the front |
+| `konsole-aware move <session> left\|right\|first\|last\|<index>` | Moves one tab |
+| `konsole-aware attach --to <session>` | Moves this tab into another tab as a side-by-side split (same window) |
+| `konsole-aware pair` | Puts this project's agent tabs into one split tab, Claude on the left |
+| `konsole-aware detach-pane` | Moves one pane of a split tab out into its own window |
+| `konsole-aware detach` | Moves the tab into a new window |
+| `konsole-aware split [left-right\|top-bottom]`, `equalize`, `maximize-split` | Split view |
+| `konsole-aware anchor`, `unanchor` | Pins a tab to the front of its window |
+| `konsole-aware switch <session>` | Focuses a tab |
 
-# List all groups and assigned tabs
-konsole-aware group list
+### Names and colors
 
-# Remove tab from group
-konsole-aware group remove --tab 9
+| Command | What it does |
+| :--- | :--- |
+| `konsole-aware set-job "Indexer" [--icon ⚡]` | Fixed project name for a tab; `--clear` goes back to automatic |
+| `konsole-aware set-icon 🦀`, `set-icon --clear` | Fixed icon for a tab |
+| `konsole-aware set-folder-icon contracts 📜` | Icon for every folder with that name; `--list` shows them all |
+| `konsole-aware group set backend --color blue --icon ⚙️` | Tab groups; also `remove`, `list`, `auto` |
+| `konsole-aware set-color amber`, `set-color reset` | Tab color by name or hex |
+| `konsole-aware set-title "text"`, `reset` | Your own title, or back to Konsole's default |
+| `konsole-aware refresh` | Redraws every open tab, for example after changing the config |
+
+### Setup
+
+| Command | What it does |
+| :--- | :--- |
+| `konsole-aware install [--no-menu]` | Sets up hooks and shell integration for your user |
+| `konsole-aware uninstall` | Takes them back out |
+| `konsole-aware alert "Title" "Body" [--error]` | Sends a test notification |
+| `konsole-aware daemon` | Optional background poller for shells that don't load the integration |
+
+`konsole-aware agent`, `preexec`, `precmd` and `watchdog` are called by the hooks.
+
+## Tab right-click menu
+
+Right-click a tab (in a Konsole started from the launcher):
+
+| Item | What it does |
+| :--- | :--- |
+| Attach Tab To… | Right under Konsole's own Detach Tab. Lists the other tabs in the window by title; pick one and this tab becomes a split inside it. Also has Pair This Project's Agents Side by Side, and Split This Pane Out to a New Window |
+| Snap Project Tabs Together | `snap` for this window |
+| Anchor / Pin Tab, Unpin Tab | Pins the tab to the front |
+| Tab Color, Assign Group, Project & Job Context, Tab Icon | Per-tab settings |
+| Send Tab To… | Moves the tab, with whatever is running in it, to another Konsole window |
+| Split View, Organize Tabs, Refresh All Tabs | Window actions |
+
+Everything acts on the tab you right-clicked, not the one that happens to be active. The menu library also makes
+Konsole cut long tab titles at the end instead of the start, so the agent name stays visible when tabs get narrow.
+
+> [!WARNING]
+> The menu library calls Konsole's internal `TabbedViewContainer` code, looked up when Konsole starts. Items it can't
+> find are greyed out instead of crashing Konsole. A Konsole upgrade can still change those internals, so reinstall
+> after upgrading Konsole.
+
+## Configuration
+
+Settings live in `~/.config/konsole-aware/config.json`, created with the defaults the first time it runs. Run
+`konsole-aware refresh` after you edit it. If the file has a JSON error, konsole-aware uses the defaults and leaves
+your file alone.
+
+```json
+{
+  "tab_color_mode": "status",
+  "agent_order": ["agy", "claude"],
+  "model_icons": {"fable": "", "opus": "🟣"},
+  "notification_timeout_seconds": 6
+}
 ```
 
-### Tab Anchoring (Pinning)
+| Key | Default | What it does |
+| :--- | :--- | :--- |
+| `show_agent_identity` | `true` | Agent name at the start of the title |
+| `show_agent_model` | `true` | Model and effort |
+| `show_agent_mode` | `true` | Permission or execution mode |
+| `model_icons` | `{}` | Icons per model family; `{"fable": ""}` removes the Fable diamond |
+| `agent_identities` | `{}` | Rename an agent's tag, or add one: `{"myagent": {"icon": "🦾", "label": "MINE", "procs": ["myagent"]}}` |
+| `agent_order` | claude, agy, gemini, codex, aider, copilot, cursor, opencode | Order of agent tabs within a project |
+| `auto_snap_agents` | `true` | Moves a tab next to its project's other tabs when an agent starts in it |
+| `snap_include_user_sessions` | `true` | Also pulls plain shells of the project together when snapping |
+| `tab_color_mode` | `"agent"` | `agent`: each agent gets its own color; `status`: color by state; `agent_status`: agent color while working, green when done |
+| `compact_tab_titles` | `true` | Shorter titles when a lot of tabs are open |
+| `max_job_length` | `16` | Longest project name in a title |
+| `agent_watchdog` | `true` | Ends a turn that finished without a hook (Esc, a crashed agent) |
+| `alert_only_unfocused` | `true` | Only notifies for tabs that aren't the active tab of their window |
+| `notification_timeout_seconds` | `4` | How long a notification stays up |
+| `notification_burst`, `notification_window_seconds` | `4`, `20` | No more than 4 notifications per 20 seconds, all tabs combined |
+| `sticky_alerts` | `false` | Keeps permission and question notifications up until you close them |
+| `alert_sound` | `true` | Plays a sound with notifications (`alert_sound_file`, `alert_sound_error_file`) |
+| `min_duration_seconds` | `3.0` | Shell commands shorter than this never notify |
+| `title_update_min_interval` | `1.0` | Seconds between title updates while an agent runs tool after tool |
+| `job_name_source` | `"auto"` | `auto` (Git root or project file), `git`, or `cwd` |
+| `folder_icons`, `project_file_icons` | `{}` | Your own folder-name and project-file icons |
+| `colors` | busy `#f59e0b`, done `#10b981`, error `#ef4444`, waiting `#8b5cf6`, blocked `#db2777`, limited `#f97316` | State colors |
 
-Anchor critical tabs to lock them at the leftmost position:
+Every key and its default is in `DEFAULT_CONFIG` in [`konsole_aware/config.py`](konsole_aware/config.py).
 
-```bash
-# Pin current tab or tab 9 to the far left
-konsole-aware anchor --tab 9
+## Environment variables
 
-# Unpin tab
-konsole-aware unanchor --tab 9
+### Read by konsole-aware
+
+| Variable | What it does | Default |
+| :--- | :--- | :--- |
+| `KONSOLE_AWARE_DISABLE` | `1` turns the shell integration off in that shell | unset |
+| `KONSOLE_AWARE_BIN` | Where the shell scripts and the menu find `konsole-aware` | `~/.local/bin/konsole-aware`, then `PATH` |
+| `KONSOLE_AWARE_STATE_DIR` | Where tab state is kept | `$XDG_RUNTIME_DIR/konsole-aware` |
+| `KONSOLE_AWARE_QDBUS` | Which `qdbus` to use when PyGObject isn't installed | first of `qdbus6`, `qdbus-qt6`, `qdbus`, `qdbus-qt5` |
+| `KONSOLE_AWARE_KEEP_ELIDE` | Set it to keep Konsole cutting titles at the start | unset |
+| `KONSOLE_AWARE_HOME`, `KONSOLE_AWARE_REPO` | Where `get.sh` clones to, and from | `~/.local/share/konsole-aware`, this repo |
+| `KONSOLE_AWARE_NO_DBUS`, `KONSOLE_AWARE_TERMINAL=null`, `KONSOLE_AWARE_SESSION_KEY` | Used by the tests: no D-Bus, a terminal that writes nothing, a fixed tab key | unset |
+| `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR` | Base folders for config and state | `~/.config`, `/run/user/<uid>` |
+
+### Set by Konsole and the agents
+
+| Variable | Set by | Used for |
+| :--- | :--- | :--- |
+| `KONSOLE_DBUS_SERVICE`, `KONSOLE_DBUS_SESSION`, `KONSOLE_DBUS_WINDOW` | Konsole, in every tab | Working out which tab a hook belongs to |
+| `CLAUDE_EFFORT` | Claude Code, in hook processes | The effort shown in the tab |
+| `CLAUDE_PROJECT_DIR` | Claude Code, in hook processes | The project when the hook payload has no `cwd` |
+
+## How it works
+
+### Layout
+
+```text
+konsole-aware/
+├── bin/konsole-aware              # entry point
+├── get.sh                         # one-line installer
+├── install.sh, uninstall.sh       # run `konsole-aware install` / `uninstall`
+├── konsole_aware/
+│   ├── cli.py                     # commands, shell hook handlers, list/watch/snap/refresh
+│   ├── config.py                  # DEFAULT_CONFIG, reading and writing config.json
+│   ├── install.py                 # adds and removes hooks without touching anything else
+│   ├── agents/
+│   │   ├── base.py                # shared agent handling: state, drawing the tab, notifications, auto-snap
+│   │   ├── claude.py              # Claude Code events, modes, safeguards, usage limits, model tracking
+│   │   ├── agy.py                 # Antigravity events
+│   │   ├── identity.py            # which agent a process is, and the agent/mode/model tags
+│   │   └── watchdog.py            # per-tab watcher for turns that end without a hook
+│   ├── tabs/
+│   │   ├── title.py               # builds every tab title
+│   │   ├── organizer.py           # snap, organize, attach, pair, detach, split
+│   │   ├── groups.py              # groups and pinned tabs
+│   │   └── icons.py               # project detection and folder/project icons
+│   ├── terminal/
+│   │   ├── dbus.py                # D-Bus through GLib, qdbus as a fallback
+│   │   ├── konsole.py             # title, color, badge, focus and tab listing for Konsole
+│   │   ├── ansi.py                # plain OSC titles for other terminals
+│   │   └── colors.py              # color names, terminal colors, text widths
+│   ├── tasks/classifier.py        # what kind of shell command is running
+│   ├── daemon/watcher.py          # scanning for list, watch and daemon
+│   ├── notify/notifier.py         # notify-send, sounds, rate limit
+│   └── state/manager.py           # the locked state file
+├── menu_hook/                     # right-click menu library (C++17, Qt 6)
+├── shell/                         # zsh and bash integration
+├── packaging/                     # .deb and .rpm build scripts
+├── systemd/konsole-aware.service  # optional daemon unit
+├── docs/screenshots/
+└── tests/
 ```
 
-Anchored tabs carry a `📌` indicator in titles, display a `PIN` badge, and remain pinned to the front whenever tabs are sorted or organized.
+### What happens on a hook
 
-### Tab Organizing and Sorting
+Say Claude Code is about to run `Bash(pytest -q)` in tab 13:
 
-Reorder tabs across windows automatically:
+1. Claude Code runs `konsole-aware agent claude PreToolUse` and passes a JSON payload on stdin (`tool_name`,
+   `tool_input`, `permission_mode`, `cwd`, `transcript_path`).
+2. `cli.cmd_agent` hands it to `ClaudeHandler`. Nothing gets printed back to Claude Code.
+3. The handler finds its tab from `KONSOLE_DBUS_SERVICE` and `KONSOLE_DBUS_SESSION`, which the hook inherits from the
+   tab, and finds the `claude` process by walking up its own process tree.
+4. It updates that tab's entry in the state file under a lock: agent, process id, mode, model, effort, state.
+5. It builds the title, compares title, color and badge with what it sent last time, and sends only what changed
+   (`Session.setTitle`, `setTabColor`, `setBadgeText`).
+6. On a new prompt it also starts the per-tab watcher, which follows the transcript until the turn ends.
 
-```bash
-# Organize tabs: Anchored tabs first, then Busy tabs, then Done, then Idle
-konsole-aware organize --by status
+Shell commands go through `preexec` and `precmd` the same way. Each command carries a counter for its shell, so if the
+`precmd` happens to finish before the `preexec` (both run in the background) the tab doesn't get stuck on busy.
 
-# Same-project tabs together, agent tabs (claude, agy, ...) side by side
-konsole-aware organize --by project
-
-# Group all tabs of the same category or project together
-konsole-aware organize --by group
-
-# Sort tabs alphabetically by title or by session ID
-konsole-aware organize --by name
-konsole-aware organize --by id
-
-# Target a specific window (e.g. Window 2)
-konsole-aware organize --by status --window 2
+```mermaid
+flowchart LR
+    CC[Claude Code hooks] --> H[agent and shell handlers]
+    AGY[agy hooks] --> H
+    SH[zsh and bash hooks] --> H
+    TR[(agent transcripts)] --> W[per-tab watcher]
+    H --> S[(state file)]
+    W --> S
+    H --> T[title, color, badge]
+    T -->|D-Bus| K[Konsole]
+    H --> N[notifications]
+    M[right-click menu in Konsole] -->|konsole-aware CLI| O[organizer]
+    O -->|D-Bus| K
 ```
 
-### Moving Tabs Manually
+### Pieces worth knowing about
 
-Shift tabs within their window:
+**Which agent is in a tab** (`agents/identity.py`). Agents are matched by process name, including launchers like
+`node …/claude-code/cli.js`, `npx @google/gemini-cli` and Claude's versioned binaries
+(`~/.local/share/claude/versions/2.1.286`). What a hook recorded only counts while that agent process is still alive,
+so when an agent exits the tab goes back to `USER`.
 
-```bash
-konsole-aware move 9 left
-konsole-aware move 9 right
-konsole-aware move 9 first
-konsole-aware move 9 last
-konsole-aware move 9 2  # Move directly to index 2
+**Which project a tab is in** (`tabs/icons.py`). The nearest Git root. If there isn't one, the nearest folder with a
+project file (`pyproject.toml`, `Cargo.toml`, `package.json`, `go.mod` and 19 more). The search stops at your home
+folder, and it stops below any folder that holds two or more projects, so a stray `package.json` in
+`~/Documents/GitHub` doesn't lump every repo in there together.
+
+**Moving tabs** (`tabs/organizer.py`). Konsole's D-Bus API can only move the active tab, one step at a time, and every
+move drops the tab's color. The organizer selects a tab, moves it, gives focus back to the tab you were on, and puts
+the colors back. Positions come from `Window.sessionList` and `Window.viewHierarchy`, so split tabs move as one.
+
+**Turns that end without a hook** (`agents/watchdog.py`). Claude Code doesn't fire a hook when you press Esc, and agy
+has no exit hook. While an agent is busy, one watcher per tab checks every 3 seconds for `[Request interrupted by user`,
+a `turn_duration` record, a usage-limit message, or the agent process being gone, and ends the turn. It exits as soon
+as the turn is over, and only rereads the transcript when the file has changed.
+
+**The right-click menu** (`menu_hook/`). The library hooks `QMenu::exec`, spots Konsole's tab menu by its
+`tab-detach` and `edit-rename` actions, and adds its own items. It maps the clicked tab to a session through the
+window's `ViewManager::sessionList` and runs the CLI with `--tab` and `--service`. When it loads it removes itself from
+`LD_PRELOAD`, so the programs you run in your tabs don't load it.
+
+**Keeping the desktop responsive.** D-Bus calls go through GLib inside the process (about 1 ms each) instead of
+starting a `qdbus` process every time. Titles are only sent when they change, and tool-by-tool updates are held to
+one per second per tab, because every title change on an active tab also changes the window title the Plasma taskbar
+has to redraw.
+
+### State file
+
+`$XDG_RUNTIME_DIR/konsole-aware/sessions.json`, in a folder only you can read, one entry per tab keyed by
+`<konsole service>:/Sessions/<n>`:
+
+```text
+org.kde.konsole-5659:/Sessions/13
+├── agent            "claude" | "agy" | … | null
+├── agent_pid        process id of the agent
+├── agent_mode       "plan", "acceptEdits", "dangerously-skip-permissions", …
+├── agent_status     thinking | tool | subagents | compacting | waiting | done | error | blocked | limited | idle
+├── model, effort    "claude-opus-5-5", "high"
+├── detail           text after the state, e.g. "Bash(pytest -q)"
+├── turn_start       when the current turn started
+├── transcript_path  the agent's transcript, read by the watcher
+├── cmd_id, finished_ids   shell command counters
+├── job_name, icon   from set-job and set-icon
+└── ui               the title, color and badge last sent to Konsole
 ```
 
-### Detaching Tabs to New Windows
+The same folder has `sessions.lock`, `notify-times.json` (the notification limit), one `watch-*.lock` per running
+watcher, and `errors.log`.
 
-Detach any tab into its own independent Konsole window:
+## Testing
 
 ```bash
-# Detach tab 7 into a new window
-konsole-aware detach 7
-
-# Detach currently active tab
-konsole-aware detach
+python3 -m pytest -q
 ```
 
-### Reclipping and Splitting Views
-
-Clip multiple views together side-by-side or stacked inside the same tab:
-
-```bash
-# Split view horizontally (side by side)
-konsole-aware split left-right
-
-# Split view vertically (top/bottom)
-konsole-aware split top-bottom
-
-# Balance all split view sizes equally
-konsole-aware equalize
-
-# Toggle maximize on the focused split view
-konsole-aware maximize-split
+```text
+.........................................................................................
+89 passed in 0.9s
 ```
 
-### Colored Text and Badges
+The tests don't need Konsole and don't touch your setup. `tests/conftest.py` points config and state at a temp
+folder, turns D-Bus off, and swaps in a terminal that records what it was told instead of writing to your screen.
 
-Apply color tags to titles and tint tabs:
+| File | Covers |
+| :--- | :--- |
+| `tests/test_agents.py` | Claude and agy events, modes, models, safeguard blocks, usage limits, the watcher, title throttling, hook output |
+| `tests/test_identity_snap_install.py` | Agent detection, snap order, split tabs, shell hook ordering, install and uninstall merging |
+| `tests/test_classifier.py` | Shell command kinds |
+| `tests/test_title_composer.py`, `test_icons.py`, `test_terminal.py`, `test_groups_and_organizer.py` | Titles, icons, terminal output, groups, colors |
 
-```bash
-# Prepend colored Unicode glyph (red, green, blue, yellow, purple, orange)
-konsole-aware set-title "Production Logs" --color-tag red
+A test for a Claude event looks like this:
 
-# Use square color tags
-konsole-aware set-title "Build Worker" --color-tag emerald --square
+```python
+from konsole_aware.agents.claude import ClaudeHandler
+from konsole_aware.state.manager import StateManager
+from konsole_aware.terminal import NullTerminal
 
-# Set tab background color directly (hex or color name)
-konsole-aware set-color "#f59e0b"
-konsole-aware set-color emerald
 
-# Reset tab appearance back to normal
-konsole-aware reset
+class Recorder(NullTerminal):
+    def __init__(self):
+        super().__init__()
+        self.titles = []
 
-# Send a desktop alert with audio
-konsole-aware alert "Backup Done" "Data synchronization completed."
+    def set_title(self, title, role=0):
+        self.titles.append(title)
+        return True
+
+
+def test_compaction_shows_in_title():
+    StateManager().clear_session("test:/Sessions/1")
+    term = Recorder()
+    ClaudeHandler(term=term).handle_event("PreCompact", {"cwd": "/tmp", "trigger": "manual"})
+    assert "compacting (manual)" in term.titles[-1]
 ```
 
-### Tab Right-Click Context Menu
+CI runs the tests on Python 3.8, 3.10, 3.12 and 3.13, checks the shell scripts with `bash -n` and `zsh -n`, and
+builds the menu library.
 
-When right-clicking on any tab in Konsole, `konsole-aware` extends the native context menu with direct options:
-
-- **📌 Anchor / Pin Tab** & **📍 Unpin Tab**: Lock tabs to the far left.
-- **🎨 Tab Color**: Set tab background directly to Emerald (`#10b981`), Amber (`#f59e0b`), Red (`#ef4444`), Purple (`#8b5cf6`), Blue (`#3b82f6`), Reset Color, or select a Custom Color via color picker.
-- **🏷️ Assign Group**: Place tabs into groups (Agents, Frontend, Backend, Data, Infrastructure, Custom, or Remove).
-- **📂 Project Context**: Set a permanent custom job name or reset back to the auto-detected Git root.
-- **🎯 Tab Icon**: Select from common development icons (🦀, 🐍, 📦, 🐹, ☕, 🐳, 🎨, ⚙️, 🧪, 🚀, 🔥, ⚡, 💎, 📜), pick a custom emoji, or revert to auto.
-- **🪟 Send Tab To...**:
-  - **➕ New Window (Detach)**: Detach the tab into its own independent window.
-  - **🪟 Window: [Title]**: Transfer the tab and its live process directly to any other open Konsole window!
-- **✂️ Split View**: Split horizontally (left/right), vertically (top/bottom), or equalize split view sizes.
-- **🧲 Snap Project Tabs Together**: Cluster same-project tabs with agent tabs side by side.
-- **🧹 Organize Tabs**: Automatically sort tabs in the window by status, group, name, or project.
-
-The context menu hook is built into `~/.local/lib/libkonsole_aware_menu.so` and loaded whenever Konsole is launched from `~/.local/bin/konsole` or the desktop application shortcut (quit and restart Konsole after installing). It acts on the tab you right-clicked, not the active tab, and removes itself from `LD_PRELOAD` so it is not loaded into the shells and programs running in your tabs.
-
-### Run as a Background Daemon (Optional)
-
-To continuously poll tabs and catch long-running tasks regardless of how they were launched:
+## Building the packages
 
 ```bash
-# In terminal
-konsole-aware daemon
+packaging/build-deb.sh     # dist/konsole-aware_<version>_amd64.deb   (needs dpkg-deb, g++, make, qt6-base-dev)
+packaging/build-rpm.sh     # dist/konsole-aware-<version>-1.<dist>.x86_64.rpm   (needs rpmbuild, gcc-c++, make, qt6-qtbase-devel)
+```
 
-# Or via systemd user service
+Both take an optional version and default to `konsole_aware.__version__`. Pushing a `v*` tag runs
+`.github/workflows/release.yml`, which builds the `.deb` on Ubuntu 24.04 and the `.rpm` on Fedora and attaches both to
+the GitHub release with that version's notes from `CHANGELOG.md`.
+
+## Updating
+
+| Installed with | Update with |
+| :--- | :--- |
+| One line | Run the same `curl … \| bash` again |
+| `.deb` / `.rpm` | Install the newer package, then `konsole-aware install` |
+| Source | `git pull && ./install.sh` |
+
+Then `konsole-aware refresh` redraws your open tabs. Running agents pick up the new code on their next event. The
+right-click menu needs a Konsole restart.
+
+The optional daemon covers shells that don't load the integration, like a shell started with `--norc`. You don't need
+it for agents or for normal shells:
+
+```bash
 mkdir -p ~/.config/systemd/user
 cp systemd/konsole-aware.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now konsole-aware.service
 ```
 
-## Configuration
+## Troubleshooting
 
-Settings are stored at `~/.config/konsole-aware/config.json`. The file is created automatically on first run with these defaults:
+### `konsole-aware list` says "No active Konsole sessions detected."
 
-```json
-{
-  "version": 1,
-  "min_duration_seconds": 3.0,
-  "alert_sound": true,
-  "alert_sound_file": "/usr/share/sounds/freedesktop/stereo/complete.oga",
-  "alert_sound_error_file": "/usr/share/sounds/freedesktop/stereo/dialog-warning.oga",
-  "alert_only_unfocused": true,
-  "enable_tab_colors": true,
-  "enable_badges": true,
-  "enable_desktop_notifications": true,
-  "colors": {
-    "busy": "#f59e0b",
-    "done": "#10b981",
-    "error": "#ef4444",
-    "waiting": "#8b5cf6",
-    "idle": "#3b82f6",
-    "reset": "#000000"
-  },
-  "show_agent_identity": true,
-  "show_agent_mode": true,
-  "agent_identities": {},
-  "agent_order": ["claude", "agy", "gemini", "codex", "aider", "copilot", "cursor", "opencode"],
-  "auto_snap_agents": true,
-  "snap_include_user_sessions": true,
-  "tab_color_mode": "agent",
-  "known_agents": ["agy", "claude", "aider", "copilot", "cursor-agent", "gemini", "codex", "opencode", "openhands"],
-  "known_transfers": ["rsync", "scp", "sftp", "rclone", "ftp", "bcp"],
-  "known_downloads": ["curl", "wget", "aria2c", "axel", "yt-dlp"],
-  "known_builds": ["cargo", "make", "ninja", "cmake", "go", "mvn", "gradle", "npm", "yarn", "pnpm", "rustc", "gcc", "clang", "g++"]
-}
-```
+D-Bus can't reach Konsole.
 
-### Key Options
+1. Check Konsole is on the session bus: `qdbus6 | grep org.kde.konsole`.
+2. Install `python3-gi`, or `qdbus6` from your distro's Qt 6 tools package, if you have neither.
+3. In a container or over ssh you're probably on a different session bus; pass `--service` and run it from the desktop
+   session.
 
-- `min_duration_seconds`: Commands shorter than this number of seconds will not trigger desktop notifications or audio bells.
-- `alert_only_unfocused`: When set to `true`, desktop alerts and sounds only fire if the tab is not the currently active tab in its window.
-- `enable_tab_colors`: Enables or disables Konsole tab background highlighting.
-- `agent_identities`: Override an agent's tag, e.g. `{"claude": {"icon": "🟠", "label": "CC"}}`, or add a new agent: `{"myagent": {"icon": "🦾", "label": "MINE", "procs": ["myagent"]}}`.
-- `agent_order`: Order of agent tabs inside a snapped project cluster.
-- `auto_snap_agents`: Snap a tab next to its project's other tabs when an agent starts in it.
-- `snap_include_user_sessions`: Also pull plain `👤 USER` shells of the same project into the cluster.
+### The right-click menu doesn't have the konsole-aware items
 
-State lives in `$XDG_RUNTIME_DIR/konsole-aware/` (private to your user). Hook errors never reach the agent; they are logged to `errors.log` there.
-## Uninstallation
-
-To remove hooks, aliases, and shell sources (only konsole-aware's own hook entries are removed; your other Claude Code and agy hooks are kept):
+That Konsole was started without the library, usually by Plasma restoring your session at login. Quit every Konsole
+window and start Konsole from the launcher. To check:
 
 ```bash
-./uninstall.sh
+grep -c konsole_aware_menu /proc/$(pgrep -nx konsole)/maps   # 0 means it isn't loaded
 ```
 
-## Tests
+### A tab stays on thinking or tool after the agent stopped
 
-The suite is hermetic (temporary config/state, no D-Bus, no writes to your terminal):
+The agent ended without a hook. For Claude, the watcher catches an Esc within a few seconds, and `konsole-aware list`
+also clears stuck tabs. For agy, the tab is released when the shell prompt comes back. If it still sticks, look in
+`$XDG_RUNTIME_DIR/konsole-aware/errors.log`.
+
+### Tab titles get cut off at the start
+
+Konsole does that by default. Start Konsole from the launcher so the menu library can switch it to cutting at the end.
+Without the library, a wider window or fewer tabs is the only fix.
+
+### Titles show `%d` or other odd bits
+
+Konsole treats a tab title as a format string. konsole-aware swaps `%` for `％` in the titles it sets; titles set any
+other way should avoid `%`.
+
+### No notification or sound
+
+Try `konsole-aware alert "Test" "Hello"`. If nothing shows up, install `libnotify-bin` (`notify-send`). Notifications
+for the tab you're looking at are skipped on purpose; set `"alert_only_unfocused": false` to get them too.
+
+### Claude Code or agy says a hook failed
+
+The hooks always exit 0 and print nothing (Claude Code) or `{}` (agy). Errors go to
+`$XDG_RUNTIME_DIR/konsole-aware/errors.log`. If a hook still fails, check that `konsole-aware` still exists at the path
+in your hook config: `~/.local/bin/konsole-aware` for source installs, `/usr/bin/konsole-aware` for packages.
+
+## Uninstall
 
 ```bash
-python3 -m pytest -q
+konsole-aware uninstall
 ```
+
+That takes out the shell lines, the menu library, launcher and desktop entry, the `~/.local/bin` link, and only
+konsole-aware's entries in `~/.claude/settings.json` and `~/.gemini/config/hooks.json`. Your other hooks and settings
+stay. Then remove the program itself:
+
+| Installed with | Remove with |
+| :--- | :--- |
+| One line | `rm -rf ~/.local/share/konsole-aware` |
+| `.deb` | `sudo apt remove konsole-aware` |
+| `.rpm` | `sudo dnf remove konsole-aware` |
+| Source | Delete the clone |
+
+`~/.config/konsole-aware/` (your settings) is left for you to delete if you want.
+
+## Contributing
+
+Bug reports, new agents and fixes are all welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup and how the code is
+organized, and [SECURITY.md](SECURITY.md) covers reporting a security problem privately.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).

@@ -8,3 +8,8 @@ dist/
 build/
 *.so
 .DS_Store
+.venv/
+.coverage
+htmlcov/
+menu_hook/*.o
+dist/

@@ -15,5 +15,5 @@ os.environ["KONSOLE_AWARE_STATE_DIR"] = os.path.join(_ROOT, "state")
 os.environ["KONSOLE_AWARE_TERMINAL"] = "null"
 os.environ["KONSOLE_AWARE_NO_DBUS"] = "1"
 os.environ["KONSOLE_AWARE_SESSION_KEY"] = "test:/Sessions/1"
-for var in ("KONSOLE_DBUS_SERVICE", "KONSOLE_DBUS_SESSION", "KONSOLE_DBUS_WINDOW"):
+for var in ("CLAUDE_EFFORT", "KONSOLE_DBUS_SERVICE", "KONSOLE_DBUS_SESSION", "KONSOLE_DBUS_WINDOW"):
     os.environ.pop(var, None)

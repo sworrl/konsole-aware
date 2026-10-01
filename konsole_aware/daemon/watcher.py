@@ -31,8 +31,9 @@ class TabWatcher:
     without hooks (e.g. shells that never sourced the integration).
     """
 
-    def __init__(self, poll_interval: float = 1.0):
+    def __init__(self, poll_interval: float = 1.0, service: Optional[str] = None):
         self.poll_interval = poll_interval
+        self.service = service
         self.config = load_config()
         self.classifier = CommandClassifier()
         self.notifier = Notifier()
@@ -79,7 +80,7 @@ class TabWatcher:
 
     def tick(self, manage: bool = False) -> None:
         """Scan all Konsole sessions; with manage=True also update titles and send alerts."""
-        sessions = KonsoleTerminal.list_all_sessions()
+        sessions = KonsoleTerminal.list_all_sessions(service=self.service)
         self._sessions = sessions
         now = time.time()
         active_keys = set()
@@ -190,7 +191,7 @@ class TabWatcher:
 
     def get_dashboard_data(self) -> List[Dict[str, Any]]:
         """Collect current status of all tabs for dashboard display (uses the last tick's scan)."""
-        sessions = self._sessions or KonsoleTerminal.list_all_sessions()
+        sessions = self._sessions or KonsoleTerminal.list_all_sessions(service=self.service)
         now = time.time()
         rows = []
         for s in sessions:
@@ -209,7 +210,7 @@ class TabWatcher:
                 a_status = state.get("agent_status") or state.get("status") or "running"
                 detail = state.get("detail") or ""
                 status_str = f"{a_status}: {detail}" if detail and a_status != "idle" else a_status
-                if state.get("status") in ("busy", "waiting"):
+                if state.get("status") in ("busy", "waiting", "thinking", "tool", "subagents", "compacting"):
                     start = state.get("turn_start") or state.get("start_time")
                 elif state.get("status") in ("done", "error") and state.get("duration") is not None:
                     duration_str = _fmt_duration(state["duration"])
@@ -241,6 +242,8 @@ class TabWatcher:
                 "agent": agent,
                 "agent_tag": agent_identity.identity_tag(agent),
                 "agent_mode": state.get("agent_mode") if agent != agent_identity.USER else None,
+                "model": state.get("model") if agent != agent_identity.USER else None,
+                "effort": state.get("effort") if agent != agent_identity.USER else None,
                 "project": project,
                 "cwd": cwd,
                 "group": grp["name"] if grp else "",

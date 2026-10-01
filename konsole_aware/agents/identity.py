@@ -263,3 +263,41 @@ def resolve_session_agent(
         # Hook-recorded agent without a pid (non-Konsole terminal): trust it while active.
         return agent, None
     return USER, None
+
+
+# ---------------------------------------------------------------- model / effort
+EFFORT_SHORT = {"low": "lo", "medium": "med", "high": "hi", "xhigh": "xhi", "max": "max"}
+DEFAULT_MODEL_ICONS = {"fable": "💎", "opus": "", "sonnet": "", "haiku": ""}
+
+
+def short_model(model: Any) -> str:
+    """claude-opus-4-8-20260101 -> Opus 4.8; claude-fable-5-1 -> Fable 5.1; other ids pass through."""
+    text = str(model or "").strip()
+    m = re.match(r"(?:claude-)?(fable|opus|sonnet|haiku|mythos)-(\d+)(?:[-.](\d{1,2}))?(?:-\d{8})?", text, re.I)
+    if m:
+        return f"{m.group(1).capitalize()} {m.group(2)}" + (f".{m.group(3)}" if m.group(3) else "")
+    m = re.match(r"claude-(\d+)(?:-(\d))?-([a-z]+)", text)  # claude-3-5-sonnet-20241022
+    if m:
+        return f"{m.group(3).capitalize()} {m.group(1)}" + (f".{m.group(2)}" if m.group(2) else "")
+    m = re.match(r"gemini-(\d+(?:\.\d+)?)-?([a-z]+)?", text, re.I)  # gemini-3-pro -> Gemini 3 Pro
+    if m:
+        return f"Gemini {m.group(1)}" + (f" {m.group(2).capitalize()}" if m.group(2) else "")
+    text = re.sub(r"\[1m\]$", "", text)
+    return text if len(text) <= 18 else text[:17] + "…"
+
+
+def model_tag(model: Optional[str], effort: Optional[str] = None) -> str:
+    """'💎 Fable 5.1·hi', 'Opus 5.5·max', 'Gemini 3 Pro' ... ('' when unknown)."""
+    if not model and not effort:
+        return ""
+    cfg = load_config()
+    if not cfg.get("show_agent_model", True):
+        return ""
+    name = short_model(model) if model else ""
+    icons = {**DEFAULT_MODEL_ICONS, **(cfg.get("model_icons") or {})}
+    family = name.split(" ")[0].lower() if name else ""
+    icon = icons.get(family, "")
+    eff = EFFORT_SHORT.get(str(effort or "").lower(), str(effort or "")) if effort else ""
+    text = f"{name}·{eff}" if name and eff else (name or f"effort {eff}")
+    return f"{icon} {text}".strip()
+

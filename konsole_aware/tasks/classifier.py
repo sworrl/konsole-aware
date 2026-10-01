@@ -163,6 +163,11 @@ class CommandClassifier:
                 "is_package": True,
             }
 
+        # 2b. Remote shells, dev servers, log follows, and interactive programs
+        special = self._classify_special(base_cmd, args, emojis, colors, task_dots)
+        if special:
+            return special
+
         # 3. File Transfers
         known_transfers = self.config.get("known_transfers", [])
         if base_cmd in known_transfers or base_cmd in ("rsync", "scp", "sftp", "rclone", "bcp"):
@@ -313,3 +318,86 @@ class CommandClassifier:
             "is_build": False,
             "is_test": False,
         }
+
+    @staticmethod
+    def _result(category: str, name: str, detail: str, icon: str, dot: str, badge: str, color: str) -> Dict[str, Any]:
+        return {
+            "category": category, "name": name, "detail": detail[:30], "icon": icon, "task_dot": dot,
+            "badge": badge, "color": color, "is_agent": False, "is_transfer": False, "is_build": False,
+            "is_test": False,
+        }
+
+    def _classify_special(self, base: str, args: List[str], emojis: Dict[str, Any], colors: Dict[str, Any],
+                          dots: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        busy = colors.get("busy", "#f59e0b")
+        positional = [a for a in args if not a.startswith("-")]
+
+        # Remote shells: show the host ("ssh -p 2222 me@nas" -> "ssh nas")
+        if base in ("ssh", "mosh", "et", "autossh"):
+            host = ""
+            skip_next = False
+            for a in args:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if a in ("-p", "-i", "-l", "-o", "-F", "-J", "-L", "-R", "-D", "-W", "-b", "-c", "-E", "-e", "-m", "-S", "-w"):
+                    skip_next = True
+                    continue
+                if not a.startswith("-"):
+                    host = a.split("@")[-1]
+                    break
+            return self._result("remote", base, f"{base} {host}".strip(), "🔐", dots.get("remote", "🟪"), "SSH",
+                                colors.get("remote", busy))
+
+        # Long-running dev servers
+        script = positional[1] if len(positional) > 1 and positional[0] == "run" else (positional[0] if positional else "")
+        is_server = (
+            base in ("vite", "next", "nuxt", "uvicorn", "gunicorn", "hypercorn", "flask", "rails", "hugo", "jekyll",
+                     "live-server", "http-server", "serve", "caddy", "nginx")
+            or (base in ("npm", "pnpm", "yarn", "bun") and script.split(":")[0] in ("dev", "start", "serve", "preview"))
+            or (base in ("python", "python3") and "http.server" in args)
+            or (base in ("cargo",) and positional[:1] == ["watch"])
+            or (base in ("php", "manage.py") and "runserver" in args)
+            or (base == "docker" and positional[:2] == ["compose", "up"] and "-d" not in args)
+        )
+        if is_server:
+            port = next((a.split("=", 1)[1] if "=" in a else "" for a in args if a.startswith("--port")), "")
+            if not port and "--port" in args and args.index("--port") + 1 < len(args):
+                port = args[args.index("--port") + 1]
+            if not port and "http.server" in args:
+                port = next((a for a in positional if a.isdigit()), "8000")
+            if base in ("npm", "pnpm", "yarn", "bun"):
+                label = " ".join([base] + positional[:2])
+            elif "http.server" in args:
+                label = "http.server"
+            else:
+                label = base
+            return self._result("server", label, label + (f" :{port}" if port else ""), "🌐",
+                                dots.get("server", "🟩"), "SRV", colors.get("server", busy))
+
+        # Following logs / live monitors
+        follows = (base in ("tail", "journalctl", "kubectl", "docker", "podman") and
+                   any(a in ("-F", "--follow") or (a.startswith("-") and not a.startswith("--") and "f" in a[1:])
+                       for a in args))
+        if follows or base in ("htop", "btop", "top", "atop", "nvtop", "watch", "glances", "iotop", "bmon", "nethogs"):
+            target = positional[-1] if positional and base != "watch" else (" ".join(positional[:2]) if positional else "")
+            return self._result("monitor", base, f"{base} {os.path.basename(target)}".strip(), "👀",
+                                dots.get("monitor", "⚪"), "LIVE", colors.get("monitor", "#64748b"))
+
+        # Interactive programs: editors, pagers, REPLs. Quitting them is not a "task finished".
+        if base in INTERACTIVE or (base in ("python", "python3", "node", "bun", "deno", "irb", "ghci", "lua")
+                                   and not positional):
+            target = os.path.basename(positional[0]) if positional else ""
+            return self._result("interactive", base, f"{base} {target}".strip(), "✏️",
+                                dots.get("interactive", "⚪"), "EDIT", colors.get("interactive", "#64748b"))
+        return None
+
+
+INTERACTIVE = {
+    "vim", "nvim", "vi", "nano", "emacs", "hx", "helix", "micro", "kak", "joe", "mcedit", "ne",
+    "less", "more", "most", "man", "info", "bat",
+    "mc", "ranger", "nnn", "lf", "yazi", "vifm", "tig", "lazygit", "gitui", "lazydocker", "k9s",
+    "ipython", "bpython", "ptpython", "psql", "mysql", "mariadb", "sqlite3", "redis-cli", "mongosh",
+    "tmux", "screen", "zellij", "fzf", "sudoedit", "crontab", "visudo",
+}
+

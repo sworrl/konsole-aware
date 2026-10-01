@@ -302,9 +302,10 @@ def _shell_precmd(args: argparse.Namespace) -> int:
     task_type = sess.get("task_type", "command")
     dur_str = _fmt_duration(duration)
     colors = config.get("colors", {})
-    notable = duration >= min_dur or task_type in ("transfer", "build", "download", "test")
+    quiet = task_type in ("interactive", "monitor", "remote", "server")
+    notable = not quiet and (duration >= min_dur or task_type in ("transfer", "build", "download", "test"))
 
-    if exit_code == 0 and not notable:
+    if (exit_code == 0 and not notable) or (quiet and exit_code in (0, 130)):
         show_user_idle()
         return 0
 
@@ -359,7 +360,7 @@ def _status_display(status_raw: str, width: int) -> str:
 
 
 def _render_table(rows: List[Dict[str, Any]], heading: str) -> List[str]:
-    cols = [("WIN", 4), ("TAB", 4), ("ACT", 3), ("PIN", 3), ("AGENT", 18), ("PROJECT", 20),
+    cols = [("WIN", 4), ("TAB", 4), ("ACT", 3), ("PIN", 3), ("AGENT", 30), ("PROJECT", 20),
             ("STATUS", 28), ("DURATION", 9), ("GROUP", 12)]
     width = sum(w for _, w in cols) + len(cols) + 1
     lines = ["", "  " + heading, "  " + "─" * width,
@@ -371,8 +372,15 @@ def _render_table(rows: List[Dict[str, Any]], heading: str) -> List[str]:
             lines.append("  " + "┄" * width)
         prev_key = key
         act = colorize("●", fg="#10b981", bold=True) if r["active"] == "●" else colorize("○", fg="#6b7280")
-        agent_txt = r["agent_tag"] + (" " + agent_identity.mode_tag(r["agent_mode"]) if r.get("agent_mode") else "")
-        agent_col = truncate_display(agent_txt, 18)
+        # Only the identity icon is an emoji here: terminals disagree on the width of
+        # most other pictographs, which would break the column alignment.
+        from konsole_aware.terminal.konsole import badge_text
+        extras = badge_text(" ".join(x for x in (
+            agent_identity.model_tag(r.get("model"), r.get("effort")),
+            agent_identity.mode_tag(r["agent_mode"]) if r.get("agent_mode") else "",
+        ) if x))
+        agent_txt = f"{r['agent_tag']} {extras}".strip()
+        agent_col = truncate_display(agent_txt, 30)
         if r["agent"] != agent_identity.USER:
             agent_col = colorize(agent_col, fg=agent_identity.identity(r["agent"]).get("color"), bold=True)
         grp = truncate_display(f"[{r['group']}]", 12) if r.get("group") else "-"
@@ -397,7 +405,7 @@ def _dashboard_rows(watcher: Any) -> List[Dict[str, Any]]:
 def cmd_list(args: argparse.Namespace) -> int:
     """List all Konsole tabs with the agent (or 👤 USER) running in each."""
     from konsole_aware.daemon.watcher import TabWatcher
-    watcher = TabWatcher()
+    watcher = TabWatcher(service=getattr(args, "service", None))
     watcher.tick()
     rows = _dashboard_rows(watcher)
 
@@ -563,6 +571,32 @@ def _window_action(args: argparse.Namespace, action: str, ok_msg: str, fail_msg:
         return 0
     print(fail_msg.format(num=num), file=sys.stderr)
     return 1
+
+
+def cmd_attach(args: argparse.Namespace) -> int:
+    """Attach this tab (all its panes) into another tab as a side-by-side split."""
+    kterm, svc, num = _require_tab(args)
+    if num is None:
+        return 1
+    ok, msg = TabOrganizer(service=svc).attach_tab(str(num), str(args.to))
+    print(("✓ Tab {} {}." if ok else "Failed to attach tab {}: {}").format(num, msg),
+          file=sys.stdout if ok else sys.stderr)
+    return 0 if ok else 1
+
+
+def cmd_pair(args: argparse.Namespace) -> int:
+    """Join this project's agent tabs (claude, agy, ...) into one split tab."""
+    kterm, svc, num = _require_tab(args)
+    if num is None:
+        return 1
+    ok, msg = TabOrganizer(service=svc).pair_project(str(num))
+    print(("✓ " + msg) if ok else f"Nothing paired: {msg}", file=sys.stdout if ok else sys.stderr)
+    return 0 if ok else 1
+
+
+def cmd_detach_pane(args: argparse.Namespace) -> int:
+    """Move one pane of a split tab back out into its own tab."""
+    return _window_action(args, "detach_pane", "✓ Pane {num} split out into its own window.", "Failed to detach pane {num}.")
 
 
 def cmd_detach(args: argparse.Namespace) -> int:
@@ -880,6 +914,14 @@ def refresh_all_tabs(service: Optional[str] = None, session_num: Optional[int] =
         agent, _ = agent_identity.resolve_session_agent(state, fg_pid, shell_pid)
         cwd = state.get("cwd") or s.get("cwd")
 
+        if agent == "claude" and not state.get("model"):
+            # Backfill model/effort for sessions that started before they were tracked.
+            from konsole_aware.agents.claude import latest_model_effort
+            from konsole_aware.agents.watchdog import _guess_claude_transcript
+            path = state.get("transcript_path") or _guess_claude_transcript(cwd)
+            model, effort = latest_model_effort(path)
+            if model:
+                state = state_mgr.set_session(s_key, model=model, effort=effort or state.get("effort"))
         if agent != agent_identity.USER:
             a_status = state.get("agent_status") or state.get("status") or "idle"
             detail = state.get("detail") or ""
@@ -906,7 +948,9 @@ def refresh_all_tabs(service: Optional[str] = None, session_num: Optional[int] =
 
             kterm.set_title(title, role=0)
             kterm.set_tab_color(color)
-            kterm.set_badge(f"{ident.get('label', '')} · {badge}", enabled=True, icon=ident.get("icon", ""))
+            m_tag = agent_identity.model_tag(state.get("model"), state.get("effort"))
+            kterm.set_badge(f"{(ident.get('label', '') + ' ' + m_tag).strip()} · {badge}", enabled=True,
+                            icon=ident.get("icon", ""))
             updated += 1
         else:
             cmd = "" if s["is_idle_shell"] else s["command"]
@@ -1035,6 +1079,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_list = subparsers.add_parser("list", aliases=["status"], help="List all tabs with their agent / user identity")
     p_list.add_argument("--json", action="store_true", help="Output as JSON")
+    p_list.add_argument("--service", help="Only this Konsole instance (D-Bus service, e.g. org.kde.konsole-1234)")
     p_list.set_defaults(func=cmd_list)
 
     p_switch = subparsers.add_parser("switch", aliases=["focus"], help="Switch focus to a tab/session")
@@ -1082,6 +1127,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_detach.add_argument("session", nargs="?", help="Session number to detach (default: current)")
     _add_target(p_detach)
     p_detach.set_defaults(func=cmd_detach)
+
+    p_attach = subparsers.add_parser("attach", help="Attach a tab into another tab as a side-by-side split")
+    p_attach.add_argument("--to", type=int, required=True, help="Session number of the tab to attach into")
+    _add_target(p_attach)
+    p_attach.set_defaults(func=cmd_attach)
+
+    p_pair = subparsers.add_parser("pair", help="Join this project's agent tabs (claude, agy, ...) into one split tab")
+    _add_target(p_pair)
+    p_pair.set_defaults(func=cmd_pair)
+
+    p_dpane = subparsers.add_parser("detach-pane", help="Split one pane of a split tab out into its own window")
+    _add_target(p_dpane)
+    p_dpane.set_defaults(func=cmd_detach_pane)
 
     p_split = subparsers.add_parser("split", aliases=["clip"], help="Split view horizontally or vertically in window")
     p_split.add_argument("orientation", nargs="?", choices=["left-right", "top-bottom", "horizontal", "vertical"],

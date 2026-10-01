@@ -41,6 +41,11 @@ class AgyHandler(BaseAgentHandler):
         before = self.attach()
         if before.get("nested"):
             return {}
+        model = payload.get("modelName")
+        effort = self._argv_effort(before)
+        updates = {k: v for k, v in (("model", model), ("effort", effort)) if v and v != before.get(k)}
+        if updates:
+            self.state_mgr.set_session(self.session_key, **updates)
         prev = before.get("agent_status") or before.get("status")
         if before.get("new_agent"):
             self.maybe_auto_snap()
@@ -93,6 +98,17 @@ class AgyHandler(BaseAgentHandler):
                            f"Antigravity finished{' in ' + dur if dur else ''} in {self.session_label()} ({project})")
 
         return {}
+
+    def _argv_effort(self, before: Dict[str, Any]) -> Optional[str]:
+        from konsole_aware.agents import identity as agent_identity
+        _, pid = agent_identity.find_agent_ancestor(self.agent_name)
+        argv = agent_identity._read_argv(pid) if pid else []
+        for i, tok in enumerate(argv):
+            if tok == "--effort" and i + 1 < len(argv):
+                return argv[i + 1]
+            if tok.startswith("--effort="):
+                return tok.split("=", 1)[1]
+        return None
 
     def format_tool_detail(self, name: str, args: Dict[str, Any]) -> str:
         """Format tool call arguments into a concise, readable summary."""

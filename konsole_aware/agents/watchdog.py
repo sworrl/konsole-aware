@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional
 from konsole_aware.agents import identity as agent_identity
 from konsole_aware.state.manager import STATE_DIR, StateManager
 
-POLL_SECONDS = 2.0
+POLL_SECONDS = 3.0
 MAX_LIFETIME = 12 * 3600
 ACTIVE = ("thinking", "tool", "busy", "subagents", "compacting", "waiting")
 
@@ -60,6 +60,23 @@ def _last_turn_entry(path: Optional[str]) -> Optional[Dict[str, Any]]:
     """Newest meaningful transcript entry (user/assistant), skipping bookkeeping lines."""
     if not path:
         return None
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    sig = (st.st_mtime_ns, st.st_size)
+    cached = _TAIL_CACHE.get(path)
+    if cached and cached[0] == sig:
+        return cached[1]  # unchanged since the last poll: no re-read
+    entry = _read_last_turn_entry(path)
+    _TAIL_CACHE[path] = (sig, entry)
+    return entry
+
+
+_TAIL_CACHE: Dict[str, Any] = {}
+
+
+def _read_last_turn_entry(path: str) -> Optional[Dict[str, Any]]:
     try:
         with open(path, "rb") as f:
             f.seek(0, os.SEEK_END)

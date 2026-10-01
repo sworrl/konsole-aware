@@ -4,18 +4,31 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "konsole-aware"
-version = "1.0.0"
-description = "Terminal and Tab Awareness for Konsole, AI Agents (agy, claude), and long-running tasks."
+version = "1.1.0"
+description = "Konsole tab awareness for AI coding agents (Claude Code, Antigravity) and long-running shell tasks."
 readme = "README.md"
 requires-python = ">=3.8"
+license = { text = "GPL-3.0-or-later" }
 authors = [
-    { name = "Reaver" }
+    { name = "sworrl", email = "github@falcontechnix.com" }
 ]
+keywords = ["konsole", "kde", "terminal", "tabs", "claude-code", "antigravity", "ai-agents", "notifications"]
 classifiers = [
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
+    "Environment :: X11 Applications :: KDE",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
     "Topic :: Terminals",
+    "Topic :: Terminals :: Terminal Emulators/X Terminals",
 ]
+
+[project.urls]
+Homepage = "https://github.com/sworrl/konsole-aware"
+Issues = "https://github.com/sworrl/konsole-aware/issues"
+Changelog = "https://github.com/sworrl/konsole-aware/blob/main/CHANGELOG.md"
 
 [project.scripts]
 konsole-aware = "konsole_aware.cli:main"

@@ -6,6 +6,7 @@ restores the tab the user had focused, and re-applies tab colours (Konsole re-in
 the moved tabs, which drops their colour from the tab bar).
 """
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -337,6 +338,73 @@ class TabOrganizer:
             for win in self.list_windows():
                 results[win] = self.organize_window(win, sort_by=sort_by)
         return results
+
+    # ------------------------------------------------------- attach / pair
+    def tab_layout(self, window_path: str) -> List[Dict[str, Any]]:
+        """Per tab: top-level splitter id, view ids (from viewHierarchy) and pane sessions."""
+        hierarchy = (self._win(window_path, "viewHierarchy") or "").split()
+        tabs = dbus.split_tabs(self.get_window_sessions(window_path), hierarchy)
+        layout = []
+        for entry, panes in zip(hierarchy, tabs):
+            m = re.match(r"\((\d+)\)", entry)
+            if not m:
+                continue
+            views = [int(v) for v in re.findall(r"\d+", re.sub(r"\(\d+\)", "", entry))]
+            layout.append({"splitter": int(m.group(1)), "views": views, "panes": panes})
+        return layout
+
+    def attach_tab(self, session_num: str, target_session: str) -> Tuple[bool, str]:
+        """Move every pane of the tab holding `session_num` into the tab holding
+        `target_session`, side by side (the emptied tab closes). Same window only:
+        Konsole's moveView works inside one window's view manager."""
+        src = self.find_session_window(str(session_num))
+        dst = self.find_session_window(str(target_session))
+        if not src or not dst:
+            return False, "tab not found"
+        if src[0] != dst[0]:
+            return False, "tabs are in different windows (use “Send Tab To…” first)"
+        win = src[0]
+        layout = self.tab_layout(win)
+        s_tab = next((t for t in layout if str(session_num) in t["panes"]), None)
+        d_tab = next((t for t in layout if str(target_session) in t["panes"]), None)
+        if not s_tab or not d_tab:
+            return False, "could not read the window layout"
+        if s_tab is d_tab:
+            return False, "already in the same tab"
+        colors = self._tab_colors(win)
+        idx = len(d_tab["views"])
+        for view in s_tab["views"]:
+            if self._win(win, "moveView", str(view), str(d_tab["splitter"]), str(idx)) != "true":
+                return False, f"Konsole refused to move view {view}"
+            idx += 1
+        self._reapply_colors(colors)
+        return True, f"attached to tab {target_session}"
+
+    def pair_project(self, session_num: str) -> Tuple[bool, str]:
+        """Join the agent tabs (claude, agy, ...) of this tab's project into one split tab,
+        in `agent_order` (claude left, agy right)."""
+        found = self.find_session_window(str(session_num))
+        if not found:
+            return False, "tab not found"
+        win = found[0]
+        tabs = self.describe_window(win)
+        me = next((t for t in tabs if str(session_num) in t["panes"]), None)
+        if not me or not me["project"]:
+            return False, "this tab is not inside a project"
+        agents = sorted((t for t in tabs if t["project"] == me["project"] and t["agent"] != agent_identity.USER),
+                        key=lambda t: (agent_identity.agent_rank(t["agent"]), t["index"]))
+        if len(agents) < 2:
+            return False, "no other agent tab of this project in this window"
+        host = agents[0]
+        for other in agents[1:]:
+            ok, why = self.attach_tab(other["session_num"], host["session_num"])
+            if not ok:
+                return False, why
+        return True, f"paired {len(agents)} agent tabs in tab {host['session_num']}"
+
+    def detach_pane(self, session_num: str) -> bool:
+        """Split one pane back out of a split tab into its own tab (Konsole's detach-view)."""
+        return self._main_window_action(str(session_num), "detach-view")
 
     # ------------------------------------------------------- window actions
     def _main_window_action(self, session_num: str, action: str) -> bool:

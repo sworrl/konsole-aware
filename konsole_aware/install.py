@@ -38,6 +38,12 @@ AGY_TOOL_EVENTS = ["PreToolUse", "PostToolUse"]
 AGY_HOOK_NAME = "konsole-aware"
 
 WRAPPER_MARKER = "# konsole-aware konsole wrapper"
+SYSTEM_BIN = "/usr/bin/konsole-aware"
+
+
+def is_system_install(repo_root: Path) -> bool:
+    """True when running from a package install (/usr/lib/konsole-aware), not a user's clone."""
+    return str(repo_root).startswith(("/usr/", "/opt/")) or not os.access(repo_root, os.W_OK)
 DESKTOP_MARKER = "X-KonsoleAware=true"
 
 
@@ -142,13 +148,21 @@ def install(repo_root: Path, home: Optional[Path] = None, build_menu: bool = Tru
 
     local_bin = home / ".local" / "bin"
     local_bin.mkdir(parents=True, exist_ok=True)
-    target_bin = local_bin / "konsole-aware"
     source_bin = repo_root / "bin" / "konsole-aware"
-    if target_bin.is_symlink() or target_bin.exists():
-        target_bin.unlink()
-    target_bin.symlink_to(source_bin)
-    source_bin.chmod(0o755)
-    out(f"✓ Installed binary: {target_bin}")
+    if is_system_install(repo_root):
+        # Installed by the .deb/.rpm: the package owns /usr/bin/konsole-aware, and hooks call it.
+        target_bin = Path(SYSTEM_BIN) if Path(SYSTEM_BIN).exists() else source_bin
+        out(f"✓ Using system install: {target_bin}")
+    else:
+        target_bin = local_bin / "konsole-aware"
+        if target_bin.is_symlink() or target_bin.exists():
+            target_bin.unlink()
+        target_bin.symlink_to(source_bin)
+        try:
+            source_bin.chmod(0o755)
+        except OSError:
+            pass
+        out(f"✓ Installed binary: {target_bin}")
 
     # Antigravity
     agy_hooks_file = home / ".gemini" / "config" / "hooks.json"
@@ -198,17 +212,23 @@ def _install_menu_hook(repo_root: Path, home: Path, local_bin: Path, out: Callab
     menu_hook_dir = repo_root / "menu_hook"
     if not (menu_hook_dir / "Makefile").exists():
         return 0
-    try:
-        subprocess.run(["make", "-C", str(menu_hook_dir)], check=True, capture_output=True)
-    except (OSError, subprocess.CalledProcessError) as e:
-        detail = getattr(e, "stderr", b"") or b""
-        out(f"⚠ Skipped tab context-menu hook (build failed: {detail.decode(errors='ignore').strip()[:200] or e})")
-        return 0
+    prebuilt = menu_hook_dir / "libkonsole_aware_menu.so"
+    if is_system_install(repo_root):
+        if not prebuilt.exists():
+            out("⚠ Skipped tab context-menu hook (the package has no prebuilt library)")
+            return 0
+    else:
+        try:
+            subprocess.run(["make", "-C", str(menu_hook_dir)], check=True, capture_output=True)
+        except (OSError, subprocess.CalledProcessError) as e:
+            detail = getattr(e, "stderr", b"") or b""
+            out(f"⚠ Skipped tab context-menu hook (build failed: {detail.decode(errors='ignore').strip()[:200] or e})")
+            return 0
 
     local_lib = home / ".local" / "lib"
     local_lib.mkdir(parents=True, exist_ok=True)
     target_so = local_lib / "libkonsole_aware_menu.so"
-    shutil.copy2(menu_hook_dir / "libkonsole_aware_menu.so", target_so)
+    shutil.copy2(prebuilt, target_so)
     out(f"✓ Installed context menu hook library: {target_so}")
 
     real_konsole = shutil.which("konsole", path="/usr/local/bin:/usr/bin:/bin") or "/usr/bin/konsole"
@@ -221,7 +241,7 @@ def _install_menu_hook(repo_root: Path, home: Path, local_bin: Path, out: Callab
         "#!/bin/bash\n"
         f"{WRAPPER_MARKER}\n"
         f'HOOK_LIB="{target_so}"\n'
-        f'export KONSOLE_AWARE_BIN="{local_bin / "konsole-aware"}"\n'
+        f'export KONSOLE_AWARE_BIN="{SYSTEM_BIN if is_system_install(repo_root) else local_bin / "konsole-aware"}"\n'
         'if [ -f "$HOOK_LIB" ]; then\n'
         '    export LD_PRELOAD="${HOOK_LIB}${LD_PRELOAD:+:$LD_PRELOAD}"\n'
         "fi\n"

@@ -1,0 +1,31 @@
+name: Bug report
+description: Something shows the wrong state, breaks a hook, or misbehaves in Konsole
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, what you saw instead. Screenshots of the tab bar help.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Start claude in a project tab\n2. ...\n3. Tab shows ..."
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: "konsole --version; claude --version; agy --version; distro"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error log
+      description: Contents of $XDG_RUNTIME_DIR/konsole-aware/errors.log, if any
+      render: text

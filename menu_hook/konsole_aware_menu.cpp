@@ -40,6 +40,7 @@
 #include <QDBusConnectionInterface>
 #include <QDBusReply>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
 #include <QInputDialog>
 #include <QLineEdit>
@@ -53,6 +54,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTimer>
+#include <QVector>
 #include <QWidget>
 
 namespace {
@@ -125,6 +127,46 @@ bool isKonsoleProcess()
     }
     return QCoreApplication::instance() && QCoreApplication::applicationName() == QLatin1String("konsole");
 }
+
+// ---------------------------------------------------------------------------
+// Tab titles: elide at the end, not the start
+// ---------------------------------------------------------------------------
+// Konsole's DetachableTabBar hardcodes Qt::ElideLeft, so a crowded tab bar cuts the
+// *beginning* of every title, which is exactly where konsole-aware puts the agent
+// identity (✳️ CLAUDE / 🪐 AGY / 👤 USER) and the project. Switch every Konsole tab bar
+// to ElideRight as it is polished, so the identity always stays readable.
+class ElideRightFilter : public QObject
+{
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject *obj, QEvent *ev) override
+    {
+        if (ev->type() == QEvent::Polish || ev->type() == QEvent::Show) {
+            if (obj->inherits("Konsole::DetachableTabBar")) {
+                auto *bar = static_cast<QTabBar *>(obj);
+                if (bar->elideMode() != Qt::ElideRight && qEnvironmentVariableIsEmpty("KONSOLE_AWARE_KEEP_ELIDE")) {
+                    bar->setElideMode(Qt::ElideRight);
+                }
+            }
+        }
+        return false;
+    }
+};
+
+void installElideFilter()
+{
+    if (!isKonsoleProcess() || !qApp) {
+        return;
+    }
+    static ElideRightFilter *filter = nullptr;
+    if (!filter) {
+        filter = new ElideRightFilter(qApp);
+        qApp->installEventFilter(filter);
+    }
+}
+Q_COREAPP_STARTUP_FUNCTION(installElideFilter)
 
 // ---------------------------------------------------------------------------
 // Konsole private symbols
@@ -416,8 +458,100 @@ QWidget *findViewManagerOwner(QWidget *window)
     return nullptr;
 }
 
+// Session id of the first pane of every tab, computed with one ViewManager lookup.
+QVector<int> allTabSessionIds(QTabWidget *tw)
+{
+    QVector<int> out;
+    if (!tw) {
+        return out;
+    }
+    QVector<int> offsets;
+    int total = 0;
+    for (int i = 0; i < tw->count(); ++i) {
+        offsets.append(total);
+        QWidget *page = tw->widget(i);
+        total += page ? countTerminalDisplays(page) : 0;
+    }
+    QWidget *win = tw->window();
+    QStringList ids;
+    if (win) {
+        const auto objs = win->findChildren<QObject *>();
+        for (QObject *o : objs) {
+            if (!o->inherits("Konsole::ViewManager")) {
+                continue;
+            }
+            bool ok = false;
+            const QStringList cand = viewManagerSessionList(o, &ok);
+            if (ok && cand.size() == total) {
+                ids = cand;
+                break;
+            }
+        }
+    }
+    for (int i = 0; i < tw->count(); ++i) {
+        bool ok = false;
+        const int sid = (offsets[i] < ids.size()) ? ids.at(offsets[i]).toInt(&ok) : -1;
+        out.append(ok ? sid : -1);
+    }
+    return out;
+}
+
+// "🔗 Attach Tab To…" — placed right after Konsole's own "Detach Tab".
+void injectAttachMenu(QMenu *self, const TabCtx &ctx)
+{
+    QTabWidget *tw = ctx.container;
+    if (!tw) {
+        return;
+    }
+    QAction *detach = nullptr;
+    const auto actions = self->actions();
+    for (int i = 0; i < actions.size(); ++i) {
+        if (actions[i] && actions[i]->objectName() == QLatin1String("tab-detach")) {
+            detach = (i + 1 < actions.size()) ? actions[i + 1] : nullptr;
+            break;
+        }
+    }
+
+    QMenu *menu = new QMenu(QStringLiteral("🔗 Attach Tab To…"), self);
+    const QVector<int> sids = allTabSessionIds(tw);
+    const int me = ctx.currentIndex();
+    QTabBar *bar = tw->tabBar();
+    int added = 0;
+    for (int i = 0; i < tw->count(); ++i) {
+        if (i == me || i >= sids.size() || sids[i] < 0) {
+            continue;
+        }
+        QString text = bar ? bar->tabText(i) : QString();
+        text.replace(QLatin1Char('&'), QStringLiteral("&&"));
+        if (text.size() > 60) {
+            text = text.left(59) + QChar(0x2026);
+        }
+        addTabCliAction(menu, QStringLiteral("%1. %2").arg(i + 1).arg(text), ctx,
+                        {QStringLiteral("attach"), QStringLiteral("--to"), QString::number(sids[i])});
+        ++added;
+    }
+    if (added == 0) {
+        menu->addAction(QStringLiteral("(No other tabs in this window)"))->setEnabled(false);
+    }
+    menu->addSeparator();
+    addTabCliAction(menu, QStringLiteral("🧩 Pair This Project's Agents Side by Side"), ctx, {QStringLiteral("pair")});
+    QAction *paneOut = addTabCliAction(menu, QStringLiteral("↗ Split This Pane Out to a New Window"), ctx,
+                                       {QStringLiteral("detach-pane")});
+    paneOut->setEnabled(ctx.hasSession() && ctx.page && countTerminalDisplays(ctx.page) > 1);
+
+    QAction *menuAction = menu->menuAction();
+    markInjected(menuAction);
+    if (detach) {
+        self->insertAction(detach, menuAction);
+    } else {
+        self->addAction(menuAction);
+    }
+}
+
 void injectActions(QMenu *self, const TabCtx &ctx)
 {
+    injectAttachMenu(self, ctx);
+
     QAction *sep = self->addSeparator();
     markInjected(sep);
 
