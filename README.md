@@ -7,6 +7,10 @@ Tab title, taskbar, color, and alert awareness for KDE Konsole and Linux termina
 ## Features
 
 - **Agent Lifecycle Integration**: Hooks directly into Antigravity (`agy`) and Claude Code (`claude`). Displays exact states such as `🧠 agy: thinking...`, `🛠️ agy: cmd(cargo test)`, `📝 agy: edit(main.py)`, `❓ agy: question`, and `✅ [Ready] agy`.
+- **Permanent Job / Project Context**: Tab titles permanently display the active project or directory context (`[{job_name}]`) resolved from the Git repository root or directory, overridable with `konsole-aware set-job`.
+- **Dual Simultaneous Color-Coding**:
+  - Task category is displayed as a colored dot in the tab title (`🟣` Agent, `🟠` Transfer, `🟡` Build, `🟢` Test, `🔵` VCS, `🟤` Download).
+  - Execution state is displayed as the physical Konsole tab background color (Amber `#f59e0b` active, Emerald `#10b981` completed, Red `#ef4444` failed, Purple `#8b5cf6` awaiting user input).
 - **KDE Konsole DBus Control**:
   - Sets tab title (`Session.setTitle 0`) and window title / taskbar entry (`Session.setTitle 1`).
   - Colors tabs: Amber (`#f59e0b`) while active, Emerald Green (`#10b981`) upon completion, Red (`#ef4444`) on failure, and Purple (`#8b5cf6`) when user input or permission is required.
@@ -69,6 +73,53 @@ Output raw JSON:
 ```bash
 konsole-aware list --json
 ```
+
+### Permanent Job and Project Context
+
+Tab titles permanently display the repository or directory context:
+`[konsole_aware] 🟣 🧠 agy: thinking...`
+
+Override the detected project name with a permanent custom job name:
+
+```bash
+# Set custom job name for the current tab
+konsole-aware set-job "Indexer"
+
+# Set custom job name for a specific tab (e.g. Tab 4)
+konsole-aware set-job "ETL-Pipeline" --tab 4
+
+# Clear custom job name to revert back to auto Git/directory detection
+konsole-aware set-job --clear
+```
+
+### Dual Color-Coding: Tasks vs Status
+
+`konsole-aware` displays both task category and execution status simultaneously.
+
+**Task Categories (Tab Title Dot):**
+
+| Category | Dot | Example Commands |
+| :--- | :--- | :--- |
+| Agent | `🟣` | `agy`, `claude`, `aider` |
+| File Transfer | `🟠` | `rsync`, `scp`, `sftp`, `rclone` |
+| Download | `🟤` | `curl`, `wget`, `aria2c`, `yt-dlp` |
+| Build / Compile | `🟡` | `cargo build`, `make`, `ninja`, `cmake`, `npm run build` |
+| Test Runner | `🟢` | `cargo test`, `pytest`, `npm test`, `jest`, `vitest` |
+| Version Control | `🔵` | `git commit`, `git push`, `git rebase` |
+| Container | `🟦` | `docker`, `podman`, `kubectl` |
+| Archive | `📦` | `tar`, `zip`, `unzip`, `gzip` |
+| Shell Command | `⚪` | Generic commands |
+| Idle / Ready | `⚫` | Prompt awaiting command |
+
+**Execution Status (Konsole Tab Background & Glyph):**
+
+| Status | Color | Tab Background | Glyph | Meaning |
+| :--- | :--- | :--- | :--- | :--- |
+| Busy / Running | Amber | `#f59e0b` | `⏳` / `🧠` / `🛠️` | Command or agent actively working |
+| Done / Success | Emerald | `#10b981` | `✅` | Process exited with code 0 |
+| Error / Failed | Red | `#ef4444` | `❌` | Process exited with non-zero code |
+| Waiting / Prompt | Purple | `#8b5cf6` | `❓` | Agent waiting for user answer or confirmation |
+| Idle | Blue | `#3b82f6` | `💤` | Shell sitting at prompt |
 
 ### Tab Grouping
 

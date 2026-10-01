@@ -8,6 +8,7 @@ from konsole_aware.config import load_config
 from konsole_aware.terminal import get_terminal
 from konsole_aware.notify.notifier import Notifier
 from konsole_aware.state.manager import StateManager
+from konsole_aware.tabs.title import TitleComposer
 
 
 class AgyHandler(BaseAgentHandler):
@@ -17,6 +18,7 @@ class AgyHandler(BaseAgentHandler):
         self.config = load_config()
         self.notifier = Notifier()
         self.state_mgr = StateManager()
+        self.composer = TitleComposer()
 
     def handle_event(self, event_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         term = get_terminal()
@@ -26,9 +28,10 @@ class AgyHandler(BaseAgentHandler):
 
         # Extract workspace context
         workspace_paths = payload.get("workspacePaths", [])
+        workspace_dir = workspace_paths[0] if workspace_paths else None
         workspace_name = (
-            Path(workspace_paths[0]).name
-            if workspace_paths
+            Path(workspace_dir).name
+            if workspace_dir
             else Path.cwd().name
         )
 
@@ -36,7 +39,14 @@ class AgyHandler(BaseAgentHandler):
 
         if event_name in ("PreInvocation", "pre_invocation"):
             # Model is thinking / planning
-            term.set_title(f"🧠 agy: thinking...", role=0)
+            title = self.composer.compose(
+                session_key=session_id,
+                task_category="agent",
+                status="thinking",
+                detail="agy: thinking...",
+                cwd=workspace_dir,
+            )
+            term.set_title(title, role=0)
             term.set_tab_color(colors.get("busy", "#f59e0b"))
             term.set_badge("THINK", enabled=True)
             self.state_mgr.start_task(
@@ -54,7 +64,15 @@ class AgyHandler(BaseAgentHandler):
 
             # Clean and format tool description
             detail = self._format_tool_detail(name, args)
-            term.set_title(f"🛠️ agy: {detail}", role=0)
+            status = "waiting" if name == "ask_question" else "tool"
+            title = self.composer.compose(
+                session_key=session_id,
+                task_category="agent",
+                status=status,
+                detail=f"agy: {detail}",
+                cwd=workspace_dir,
+            )
+            term.set_title(title, role=0)
             term.set_tab_color(colors.get("busy", "#f59e0b"))
 
             if name == "ask_question":
@@ -74,7 +92,7 @@ class AgyHandler(BaseAgentHandler):
                 term.set_badge("TOOL", enabled=True)
 
             self.state_mgr.start_task(
-                session_id,
+                session_key=session_id,
                 task_name="agy",
                 task_type="agent",
                 detail=f"{name}: {detail}",
@@ -90,14 +108,21 @@ class AgyHandler(BaseAgentHandler):
 
         elif event_name in ("Stop", "stop"):
             # Turn or run has completed
-            finished_state = self.state_mgr.finish_task(session_id, exit_code=0, status="done")
+            finished_state = self.state_mgr.finish_task(session_key=session_id, exit_code=0, status="done")
             duration_str = ""
             if "duration" in finished_state:
                 dur = int(finished_state["duration"])
                 mins, secs = divmod(dur, 60)
                 duration_str = f" in {mins}m {secs}s" if mins else f" in {secs}s"
 
-            term.set_title(f"✅ [Ready] agy", role=0)
+            title = self.composer.compose(
+                session_key=session_id,
+                task_category="agent",
+                status="done",
+                detail=f"agy: ready{duration_str}",
+                cwd=workspace_dir,
+            )
+            term.set_title(title, role=0)
             term.set_tab_color(colors.get("done", "#10b981"))
             term.set_badge("DONE", enabled=True)
 

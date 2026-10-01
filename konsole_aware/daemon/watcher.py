@@ -11,6 +11,7 @@ from konsole_aware.tasks.classifier import CommandClassifier
 from konsole_aware.notify.notifier import Notifier
 from konsole_aware.state.manager import StateManager
 from konsole_aware.tabs.groups import TabGroupManager
+from konsole_aware.tabs.title import TitleComposer
 
 
 class TabWatcher:
@@ -23,6 +24,7 @@ class TabWatcher:
         self.notifier = Notifier()
         self.state_mgr = StateManager()
         self.group_mgr = TabGroupManager()
+        self.composer = TitleComposer()
         self._running = False
         # session_key -> state dict
         self._tracked: Dict[str, Dict[str, Any]] = {}
@@ -105,11 +107,24 @@ class TabWatcher:
                                 play_sound=True,
                             )
 
-                        # Update Konsole tab appearance
+                        s_cwd = None
+                        if fg_pid > 0:
+                            try:
+                                s_cwd = os.readlink(f"/proc/{fg_pid}/cwd")
+                            except Exception:
+                                pass
+
                         kterm = KonsoleTerminal(
                             service=s["service"], session_path=s["session_path"]
                         )
-                        kterm.set_title(f"✅ [Done {dur_str}] {task_label}")
+                        title = self.composer.compose(
+                            session_key=s_key,
+                            task_category=prev.get("category", "command"),
+                            status="done",
+                            detail=f"{task_label} ({dur_str})",
+                            cwd=s_cwd,
+                        )
+                        kterm.set_title(title)
                         kterm.set_tab_color(self.config.get("colors", {}).get("done", "#10b981"))
                         kterm.set_badge("DONE", enabled=True)
 
@@ -118,10 +133,23 @@ class TabWatcher:
                 is_busy = bool(cmd and classified and classified["category"] != "idle")
 
                 if is_busy and classified:
+                    s_cwd = None
+                    if fg_pid > 0:
+                        try:
+                            s_cwd = os.readlink(f"/proc/{fg_pid}/cwd")
+                        except Exception:
+                            pass
                     kterm = KonsoleTerminal(
                         service=s["service"], session_path=s["session_path"]
                     )
-                    kterm.set_title(f"{classified['icon']} [{classified['name']}] {classified['detail']}")
+                    title = self.composer.compose(
+                        session_key=s_key,
+                        task_category=classified["category"],
+                        status="busy",
+                        detail=f"{classified['name']} {classified['detail']}".strip(),
+                        cwd=s_cwd,
+                    )
+                    kterm.set_title(title)
                     kterm.set_tab_color(classified["color"])
                     kterm.set_badge(classified["badge"], enabled=True)
 

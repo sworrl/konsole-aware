@@ -8,6 +8,7 @@ from konsole_aware.config import load_config
 from konsole_aware.terminal import get_terminal
 from konsole_aware.notify.notifier import Notifier
 from konsole_aware.state.manager import StateManager
+from konsole_aware.tabs.title import TitleComposer
 
 
 class ClaudeHandler(BaseAgentHandler):
@@ -17,21 +18,30 @@ class ClaudeHandler(BaseAgentHandler):
         self.config = load_config()
         self.notifier = Notifier()
         self.state_mgr = StateManager()
+        self.composer = TitleComposer()
 
     def handle_event(self, event_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         term = get_terminal()
         session_id = term.get_session_id()
         colors = self.config.get("colors", {})
-        cwd_name = Path.cwd().name
+        cwd = payload.get("cwd") or os.getcwd()
+        cwd_name = Path(cwd).name
 
         response: Dict[str, Any] = {}
 
         if event_name in ("UserPromptSubmit", "user_prompt_submit"):
-            term.set_title("🧠 claude: thinking...", role=0)
+            title = self.composer.compose(
+                session_key=session_id,
+                task_category="agent",
+                status="thinking",
+                detail="claude: thinking...",
+                cwd=cwd,
+            )
+            term.set_title(title, role=0)
             term.set_tab_color(colors.get("busy", "#f59e0b"))
             term.set_badge("THINK", enabled=True)
             self.state_mgr.start_task(
-                session_id,
+                session_key=session_id,
                 task_name="claude",
                 task_type="agent",
                 detail="thinking",
@@ -43,12 +53,19 @@ class ClaudeHandler(BaseAgentHandler):
             tool_input = payload.get("input", {}) or payload.get("toolCall", {}).get("args", {})
 
             detail = self._format_tool_detail(tool_name, tool_input)
-            term.set_title(f"🛠️ claude: {detail}", role=0)
+            title = self.composer.compose(
+                session_key=session_id,
+                task_category="agent",
+                status="tool",
+                detail=f"claude: {detail}",
+                cwd=cwd,
+            )
+            term.set_title(title, role=0)
             term.set_tab_color(colors.get("busy", "#f59e0b"))
             term.set_badge("TOOL", enabled=True)
 
             self.state_mgr.start_task(
-                session_id,
+                session_key=session_id,
                 task_name="claude",
                 task_type="agent",
                 detail=f"{tool_name}: {detail}",
@@ -62,14 +79,21 @@ class ClaudeHandler(BaseAgentHandler):
             return {}
 
         elif event_name in ("Stop", "stop"):
-            finished_state = self.state_mgr.finish_task(session_id, exit_code=0, status="done")
+            finished_state = self.state_mgr.finish_task(session_key=session_id, exit_code=0, status="done")
             duration_str = ""
             if "duration" in finished_state:
                 dur = int(finished_state["duration"])
                 mins, secs = divmod(dur, 60)
                 duration_str = f" in {mins}m {secs}s" if mins else f" in {secs}s"
 
-            term.set_title("✅ [Ready] claude", role=0)
+            title = self.composer.compose(
+                session_key=session_id,
+                task_category="agent",
+                status="done",
+                detail=f"claude: ready{duration_str}",
+                cwd=cwd,
+            )
+            term.set_title(title, role=0)
             term.set_tab_color(colors.get("done", "#10b981"))
             term.set_badge("DONE", enabled=True)
 

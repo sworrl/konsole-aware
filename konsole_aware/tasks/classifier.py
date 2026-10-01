@@ -56,6 +56,8 @@ class CommandClassifier:
         emojis = self.config.get("emojis", {})
         colors = self.config.get("colors", {})
 
+        task_dots = self.config.get("task_dots", {})
+
         # 1. Agents
         known_agents = self.config.get("known_agents", [])
         if base_cmd in known_agents or any(a in base_cmd for a in ("agy", "claude", "aider")):
@@ -67,17 +69,18 @@ class CommandClassifier:
                 "name": name,
                 "detail": detail,
                 "icon": "🤖" if name != "agy" else "⚡",
+                "task_dot": task_dots.get("agent", "🟣"),
                 "badge": name.upper()[:4],
                 "color": colors.get("busy", "#f59e0b"),
                 "is_agent": True,
                 "is_transfer": False,
                 "is_build": False,
+                "is_test": False,
             }
 
         # 2. File Transfers
         known_transfers = self.config.get("known_transfers", [])
         if base_cmd in known_transfers or base_cmd in ("rsync", "scp", "sftp", "rclone", "bcp"):
-            # Preview destination or args
             target = args[-1] if args else ""
             preview = f"{base_cmd} -> {os.path.basename(target)}" if target else base_cmd
             return {
@@ -85,11 +88,13 @@ class CommandClassifier:
                 "name": base_cmd,
                 "detail": preview[:30],
                 "icon": emojis.get("transfer", "📥"),
+                "task_dot": task_dots.get("transfer", "🟠"),
                 "badge": "SYNC",
                 "color": colors.get("busy", "#f59e0b"),
                 "is_agent": False,
                 "is_transfer": True,
                 "is_build": False,
+                "is_test": False,
             }
 
         # 3. Downloads / Web fetches
@@ -101,14 +106,39 @@ class CommandClassifier:
                 "name": base_cmd,
                 "detail": f"{base_cmd} {domain}"[:30],
                 "icon": "🌐",
+                "task_dot": task_dots.get("download", "🟤"),
                 "badge": "DOWN",
                 "color": colors.get("busy", "#f59e0b"),
                 "is_agent": False,
                 "is_transfer": True,
                 "is_build": False,
+                "is_test": False,
             }
 
-        # 4. Builds & Compilations
+        # 4. Tests
+        is_test = (
+            base_cmd in ("pytest", "jest", "vitest", "ctest")
+            or (base_cmd in ("cargo", "npm", "pnpm", "yarn", "go", "mvn") and args and args[0] == "test")
+            or (args and "test" in args[0])
+        )
+        if is_test:
+            sub = args[0] if args and not args[0].startswith("-") else ""
+            name = f"{base_cmd} {sub}".strip()
+            return {
+                "category": "test",
+                "name": name,
+                "detail": name[:30],
+                "icon": "🧪",
+                "task_dot": task_dots.get("test", "🟢"),
+                "badge": "TEST",
+                "color": colors.get("busy", "#f59e0b"),
+                "is_agent": False,
+                "is_transfer": False,
+                "is_build": False,
+                "is_test": True,
+            }
+
+        # 5. Builds & Compilations
         known_builds = self.config.get("known_builds", [])
         if base_cmd in known_builds:
             sub = args[0] if args and not args[0].startswith("-") else ""
@@ -118,14 +148,16 @@ class CommandClassifier:
                 "name": name,
                 "detail": name[:30],
                 "icon": emojis.get("build", "🔨"),
+                "task_dot": task_dots.get("build", "🟡"),
                 "badge": "BLD",
                 "color": colors.get("busy", "#f59e0b"),
                 "is_agent": False,
                 "is_transfer": False,
                 "is_build": True,
+                "is_test": False,
             }
 
-        # 5. VCS (git, hg, svn)
+        # 6. VCS (git, hg, svn)
         if base_cmd in ("git", "hg", "svn"):
             sub = args[0] if args else "vcs"
             return {
@@ -133,14 +165,16 @@ class CommandClassifier:
                 "name": f"{base_cmd} {sub}",
                 "detail": f"{base_cmd} {sub}"[:30],
                 "icon": emojis.get("git", "🐙"),
+                "task_dot": task_dots.get("git", "🔵"),
                 "badge": sub.upper()[:4],
                 "color": colors.get("busy", "#f59e0b"),
                 "is_agent": False,
                 "is_transfer": False,
                 "is_build": False,
+                "is_test": False,
             }
 
-        # 6. Containers
+        # 7. Containers
         if base_cmd in ("docker", "podman", "kubectl", "helm"):
             sub = args[0] if args else ""
             return {
@@ -148,37 +182,43 @@ class CommandClassifier:
                 "name": f"{base_cmd} {sub}".strip(),
                 "detail": f"{base_cmd} {sub}"[:30],
                 "icon": emojis.get("container", "🐳"),
+                "task_dot": task_dots.get("container", "🟦"),
                 "badge": "CONT",
                 "color": colors.get("busy", "#f59e0b"),
                 "is_agent": False,
                 "is_transfer": False,
                 "is_build": False,
+                "is_test": False,
             }
 
-        # 7. Archives
+        # 8. Archives
         if base_cmd in ("tar", "zip", "unzip", "gzip", "7z", "zstd"):
             return {
                 "category": "archive",
                 "name": base_cmd,
                 "detail": base_cmd,
                 "icon": emojis.get("archive", "📦"),
+                "task_dot": task_dots.get("archive", "📦"),
                 "badge": "ARCH",
                 "color": colors.get("busy", "#f59e0b"),
                 "is_agent": False,
                 "is_transfer": False,
                 "is_build": False,
+                "is_test": False,
             }
 
-        # 8. Generic Command
+        # 9. Generic Command
         short_cmd = " ".join([base_cmd] + args[:2])[:25]
         return {
             "category": "command",
             "name": base_cmd,
             "detail": short_cmd,
             "icon": emojis.get("generic", "⏳"),
+            "task_dot": task_dots.get("command", "⚪"),
             "badge": "CMD",
             "color": colors.get("busy", "#f59e0b"),
             "is_agent": False,
             "is_transfer": False,
             "is_build": False,
+            "is_test": False,
         }

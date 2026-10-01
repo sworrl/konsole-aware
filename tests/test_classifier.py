@@ -49,9 +49,13 @@ class TestCommandClassifier(unittest.TestCase):
         self.assertEqual(res["category"], "transfer")
         self.assertEqual(res["name"], "rsync")
 
-        res_env = self.clf.classify("RUST_LOG=debug cargo test")
+        res_env = self.clf.classify("RUST_LOG=debug cargo build --release")
         self.assertEqual(res_env["category"], "build")
-        self.assertIn("cargo test", res_env["name"])
+        self.assertIn("cargo build", res_env["name"])
+
+        res_test = self.clf.classify("RUST_LOG=debug cargo test")
+        self.assertEqual(res_test["category"], "test")
+        self.assertIn("cargo test", res_test["name"])
 
     def test_classify_empty(self):
         res = self.clf.classify("")

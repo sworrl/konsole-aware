@@ -15,6 +15,7 @@ from konsole_aware.terminal.konsole import KonsoleTerminal
 from konsole_aware.terminal.colors import colorize, get_color_tag, resolve_color_hex, pad_ansi, strip_ansi
 from konsole_aware.tabs.groups import TabGroupManager
 from konsole_aware.tabs.organizer import TabOrganizer
+from konsole_aware.tabs.title import TitleComposer
 from konsole_aware.state.manager import StateManager
 from konsole_aware.tasks.classifier import CommandClassifier
 from konsole_aware.notify.notifier import Notifier
@@ -65,7 +66,7 @@ def cmd_shell_preexec(args: argparse.Namespace) -> int:
     classifier = CommandClassifier()
     term = get_terminal()
     state_mgr = StateManager()
-    grp_mgr = TabGroupManager()
+    composer = TitleComposer()
     session_id = term.get_session_id()
 
     classified = classifier.classify(cmd_str)
@@ -84,11 +85,15 @@ def cmd_shell_preexec(args: argparse.Namespace) -> int:
         original_color=orig_color,
     )
 
-    icon = classified["icon"]
     name = classified["name"]
     detail = classified["detail"]
-    base_title = f"{icon} [{name}] {detail}".strip()
-    full_title = grp_mgr.format_title(session_id, base_title)
+    full_title = composer.compose(
+        session_key=session_id,
+        task_category=classified["category"],
+        status="busy",
+        detail=f"{name} {detail}".strip(),
+        cwd=os.getcwd(),
+    )
 
     term.set_title(full_title, role=0)
     term.set_tab_color(classified["color"])
@@ -101,7 +106,7 @@ def cmd_shell_precmd(args: argparse.Namespace) -> int:
     exit_code = args.exit_code
     term = get_terminal()
     state_mgr = StateManager()
-    grp_mgr = TabGroupManager()
+    composer = TitleComposer()
     config = load_config()
     notifier = Notifier()
     session_id = term.get_session_id()
@@ -124,13 +129,25 @@ def cmd_shell_precmd(args: argparse.Namespace) -> int:
     colors = config.get("colors", {})
 
     if exit_code == 0:
-        base_title = f"✅ [Done {dur_str}] {task_name}"
-        term.set_title(grp_mgr.format_title(session_id, base_title), role=0)
+        full_title = composer.compose(
+            session_key=session_id,
+            task_category=task_type,
+            status="done",
+            detail=f"{task_name} ({dur_str})",
+            cwd=os.getcwd(),
+        )
+        term.set_title(full_title, role=0)
         term.set_tab_color(colors.get("done", "#10b981"))
         term.set_badge("DONE", enabled=True)
     else:
-        base_title = f"❌ [Exit {exit_code} ({dur_str})] {task_name}"
-        term.set_title(grp_mgr.format_title(session_id, base_title), role=0)
+        full_title = composer.compose(
+            session_key=session_id,
+            task_category=task_type,
+            status="error",
+            detail=f"{task_name} (exit {exit_code})",
+            cwd=os.getcwd(),
+        )
+        term.set_title(full_title, role=0)
         term.set_tab_color(colors.get("error", "#ef4444"))
         term.set_badge("ERR", enabled=True)
 
@@ -464,10 +481,40 @@ def cmd_maximize(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_set_job(args: argparse.Namespace) -> int:
+    """Set or clear a permanent custom job/project name for a tab."""
+    term = get_terminal()
+    state_mgr = StateManager()
+    composer = TitleComposer()
+    session_num = args.tab or (getattr(term, "get_session_num", lambda: None)() if hasattr(term, "get_session_num") else None)
+    if not session_num:
+        print("Error: Specify tab with --tab <num> or run inside a tab.", file=sys.stderr)
+        return 1
+
+    svc = getattr(term, "service", None) or os.environ.get("KONSOLE_DBUS_SERVICE", "")
+    s_key = f"{svc}:/Sessions/{session_num}"
+
+    if args.clear:
+        state_mgr.set_session(s_key, job_name=None)
+        print(f"✓ Cleared custom job name for Tab {session_num} (reverted to auto project name).")
+    else:
+        if not args.name:
+            print("Error: Specify job name (e.g. konsole-aware set-job MyProject).", file=sys.stderr)
+            return 1
+        job = args.name.strip()
+        state_mgr.set_session(s_key, job_name=job)
+        print(f"✓ Set custom job name for Tab {session_num}: [{job}]")
+
+    kterm = KonsoleTerminal(service=svc, session_path=f"/Sessions/{session_num}")
+    new_title = composer.compose(session_key=s_key, status="idle", detail="ready", cwd=os.getcwd())
+    kterm.set_title(new_title, role=0)
+    return 0
+
+
 def cmd_set_title(args: argparse.Namespace) -> int:
     """Set tab title directly with optional color tag and group/anchor awareness."""
     term = get_terminal()
-    grp_mgr = TabGroupManager()
+    composer = TitleComposer()
     session_id = term.get_session_id()
 
     title = args.title
@@ -475,7 +522,12 @@ def cmd_set_title(args: argparse.Namespace) -> int:
         tag_glyph = get_color_tag(args.color_tag, square=args.square)
         title = f"{tag_glyph} {title}"
 
-    full_title = grp_mgr.format_title(session_id, title)
+    full_title = composer.compose(
+        session_key=session_id,
+        status="busy" if args.busy else "idle",
+        detail=title,
+        cwd=os.getcwd(),
+    )
     term.set_title(full_title, role=0)
     print(f"Title set: {full_title}")
     return 0
@@ -829,11 +881,19 @@ def main() -> int:
     p_max.add_argument("--tab", type=int, help="Target tab session number")
     p_max.set_defaults(func=cmd_maximize)
 
+    # set-job
+    p_job = subparsers.add_parser("set-job", help="Set or clear a permanent custom job/project name for a tab")
+    p_job.add_argument("name", nargs="?", default="", help="Custom job or project name")
+    p_job.add_argument("--tab", type=int, help="Target tab session number")
+    p_job.add_argument("--clear", action="store_true", help="Clear custom job name (revert to auto)")
+    p_job.set_defaults(func=cmd_set_job)
+
     # set-title
     p_title = subparsers.add_parser("set-title", help="Set current tab title")
     p_title.add_argument("title", help="Title string")
     p_title.add_argument("--color-tag", help="Prepend colored glyph (red, green, blue, yellow, purple, orange, etc.)")
     p_title.add_argument("--square", action="store_true", help="Use square color badge instead of circle")
+    p_title.add_argument("--busy", action="store_true", help="Mark title as busy status")
     p_title.set_defaults(func=cmd_set_title)
 
     # set-color
