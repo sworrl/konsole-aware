@@ -43,20 +43,73 @@ class TestIdentity(unittest.TestCase):
         self.assertEqual(len(tags), 3)
         self.assertEqual(identity.identity_tag(None), "👤 USER")
 
-    def test_title_identity_first(self):
+    def test_title_project_first(self):
         StateManager().clear_session(KEY)
         c = TitleComposer()
         t = c.compose(session_key=KEY, job_name="proj", task_category="agent", status="thinking",
                       detail="thinking…", agent="claude", mode="plan")
-        self.assertTrue(t.startswith("✳️ CLAUDE 📋 PLAN [📁 proj]") or t.startswith("✳️ CLAUDE 📋 PLAN ["), t)
+        self.assertTrue(t.startswith("[") and "proj]" in t.split(" ✳️")[0], t)
+        self.assertLess(t.index("proj"), t.index("✳️ CLAUDE"))
+        self.assertLess(t.index("✳️ CLAUDE"), t.index("📋 PLAN"))
         self.assertNotIn("🟣", t)  # identity replaces the generic agent dot
         u = c.compose(session_key=KEY, job_name="proj", task_category="idle", status="idle", agent=identity.USER)
-        self.assertTrue(u.startswith("👤 USER"), u)
+        self.assertTrue(u.startswith("[") and "👤 USER" in u, u)
+
+    def test_custom_title_order(self):
+        StateManager().clear_session(KEY)
+        c = TitleComposer()
+        c.config["title_order"] = ["identity", "status", "job"]
+        t = c.compose(session_key=KEY, job_name="proj", task_category="agent", status="thinking",
+                      detail="thinking…", agent="claude", mode="plan")
+        self.assertTrue(t.startswith("✳️ CLAUDE 🧠 thinking…"), t)
+        self.assertIn("📋 PLAN", t)  # segments left out of a custom order are appended, not dropped
+
+    def test_activity_tag(self):
+        StateManager().clear_session(KEY)
+        StateManager().set_session(KEY, ultracode=True, background={"workflows": 1, "agents": 2}, teammates=["a"])
+        t = TitleComposer().compose(session_key=KEY, job_name="proj", task_category="agent", status="done",
+                                    detail="ready", agent="claude")
+        self.assertIn("🚀 ULTRA ⧗3 bg 👥1", t)
+        StateManager().clear_session(KEY)
 
 
 def tab(num, idx, project, agent=identity.USER, anchored=False):
     return {"session_num": str(num), "index": idx, "project": project, "agent": agent, "anchored": anchored,
             "panes": [str(num)]}
+
+
+class TestSessionName(unittest.TestCase):
+    def test_claude_user_name_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            sessions = Path(d) / "sessions"
+            sessions.mkdir()
+            (sessions / "4242.json").write_text(json.dumps({"name": "MikuOS", "nameSource": "user"}))
+            (sessions / "4343.json").write_text(json.dumps({"name": "konsole-aware-3e", "nameSource": "derived"}))
+            with mock.patch.dict("os.environ", {"CLAUDE_CONFIG_DIR": d}):
+                self.assertEqual(identity.session_name("claude", 4242), "MikuOS")
+                self.assertIsNone(identity.session_name("claude", 4343))  # Claude's own folder-based name
+                self.assertIsNone(identity.session_name("claude", 9999))
+        self.assertIsNone(identity.session_name("claude", None))
+
+    def test_agy_project_flag(self):
+        with mock.patch.object(identity, "_read_argv", return_value=["agy", "--project", "MikuOS"]):
+            self.assertEqual(identity.session_name("agy", 1), "MikuOS")
+        with mock.patch.object(identity, "_read_argv", return_value=["agy", "--project=default-cli-project"]):
+            self.assertIsNone(identity.session_name("agy", 1))
+        with mock.patch.object(identity, "_read_argv", return_value=["agy"]):
+            self.assertIsNone(identity.session_name("agy", 1))
+
+    def test_name_is_the_project_in_the_title(self):
+        key = "test-svc:/Sessions/77"
+        state = StateManager()
+        state.set_session(key, agent="claude", session_name="MikuOS", job_name=None)
+        composer = TitleComposer()
+        self.assertEqual(composer.get_job_name(session_key=key, cwd="/tmp"), "MikuOS")
+        state.set_session(key, job_name="override")  # set-job still wins
+        self.assertEqual(composer.get_job_name(session_key=key, cwd="/tmp"), "override")
+        state.set_session(key, job_name=None, agent=None)  # agent gone: back to the folder
+        self.assertNotEqual(composer.get_job_name(session_key=key, cwd="/tmp"), "MikuOS")
+        state.clear_session(key)
 
 
 class TestSnapOrder(unittest.TestCase):
@@ -143,6 +196,8 @@ class TestInstallMerge(unittest.TestCase):
                 agy = json.loads((home / ".gemini" / "config" / "hooks.json").read_text())
                 self.assertIn("other", agy)
                 self.assertNotIn("decision", json.dumps(agy))
+                self.assertNotIn("PreToolUse", agy["konsole-aware"])
+                self.assertIn("PostToolUse", agy["konsole-aware"])
                 install.uninstall(home=home, out=out.append)
             settings = json.loads((home / ".claude" / "settings.json").read_text())
             self.assertEqual(settings, {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "notify.sh"}]}]}})

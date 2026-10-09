@@ -241,6 +241,55 @@ def agent_mode_from_pid(pid: Optional[int]) -> Optional[str]:
     return mode_from_argv(_read_argv(pid)) if pid else None
 
 
+# ------------------------------------------------------------------ session names
+def _claude_home() -> Path:
+    env = os.environ.get("CLAUDE_CONFIG_DIR", "")
+    return Path(env) if env and os.path.isabs(env) else Path.home() / ".claude"
+
+
+def _agy_project_name(value: str) -> Optional[str]:
+    """Name of an agy project given its id or name (`agy --project ...`)."""
+    if not value or value == "default-cli-project":
+        return None
+    projects = Path.home() / ".gemini" / "config" / "projects"
+    try:
+        import json
+        data = json.loads((projects / f"{value}.json").read_text(encoding="utf-8"))
+        name = (data.get("name") or "").strip()
+        return name or value
+    except (OSError, ValueError):
+        return value  # passed by name rather than id
+
+
+def session_name(agent: Optional[str], pid: Optional[int]) -> Optional[str]:
+    """The name the user gave this agent session, or None.
+
+    Claude Code: the session name (`/rename`, `--name`), from ~/.claude/sessions/<pid>.json.
+    Names Claude derives on its own from the folder ("konsole-aware-3e") are ignored.
+    agy: the project passed with `--project`. agy's conversation titles are written by
+    the model for every conversation, and a `/rename` can't be told apart from them, so
+    they are not used.
+    """
+    if not agent or not pid:
+        return None
+    if agent == "claude":
+        try:
+            import json
+            data = json.loads((_claude_home() / "sessions" / f"{pid}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        name = (data.get("name") or "").strip()
+        return name if name and data.get("nameSource") == "user" else None
+    if agent == "agy":
+        argv = _read_argv(pid)
+        for i, arg in enumerate(argv):
+            if arg == "--project" and i + 1 < len(argv):
+                return _agy_project_name(argv[i + 1].strip())
+            if arg.startswith("--project="):
+                return _agy_project_name(arg.split("=", 1)[1].strip())
+    return None
+
+
 def resolve_session_agent(
     state: Optional[Dict[str, Any]],
     foreground_pid: int = -1,
@@ -300,4 +349,22 @@ def model_tag(model: Optional[str], effort: Optional[str] = None) -> str:
     eff = EFFORT_SHORT.get(str(effort or "").lower(), str(effort or "")) if effort else ""
     text = f"{name}·{eff}" if name and eff else (name or f"effort {eff}")
     return f"{icon} {text}".strip()
+
+
+def activity_tag(sess: Optional[Dict[str, Any]]) -> str:
+    """Extra work around the agent: ultracode on, background workflows/agents/tasks still
+    running, teammates. Empty when there is nothing beyond the main turn."""
+    sess = sess or {}
+    parts = []
+    if sess.get("ultracode"):
+        parts.append("🚀 ULTRA")
+    bg = sess.get("background") or {}
+    if isinstance(bg, dict) and sess.get("agent_status") != "background":  # status already says it
+        n = sum(int(v) for v in bg.values() if isinstance(v, (int, float)))
+        if n:
+            parts.append(f"⧗{n} bg")
+    teammates = sess.get("teammates") or []
+    if teammates:
+        parts.append(f"👥{len(teammates)}")
+    return " ".join(parts)
 

@@ -1,6 +1,7 @@
 """KDE Konsole D-Bus terminal controller."""
 
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from konsole_aware.terminal import dbus
 from konsole_aware.terminal.base import BaseTerminal
@@ -178,15 +179,34 @@ class KonsoleTerminal(BaseTerminal):
         return self._call("tabColor") or ""
 
     def set_tab_color(self, hex_color: str) -> bool:
-        if not self.is_available() or not self.config.get("enable_tab_colors", True):
+        if not self.is_available():
+            return False
+        self.publish_tab_style(hex_color)
+        if not self.config.get("enable_tab_colors", True):
             return False
         return self._call("setTabColor", hex_color) is not None
 
     def reset_tab_color(self) -> bool:
         if not self.is_available():
             return False
-        # An invalid colour clears the tab colour back to the theme default.
+        self.publish_tab_style(None)
+        # An invalid color clears the tab color back to the theme default.
         return self._call("setTabColor", "") is not None
+
+    def publish_tab_style(self, status_color: Optional[str]) -> None:
+        """Publish this tab's patterned background (project color + status color) for the
+        Konsole library to paint. A no-op when the spec has not changed."""
+        if self.config.get("tab_pattern", "project-status") == "none":
+            return
+        try:
+            from konsole_aware.tabs.icons import IconResolver
+            from konsole_aware.tabs import styles
+            root = IconResolver().find_project_root(self.get_cwd())
+            if root == Path.home() or root == Path("/"):
+                root = None
+            styles.apply(self.get_session_id(), str(root) if root else None, status_color)
+        except Exception:
+            pass
 
     def get_process_id(self) -> int:
         """Get the PID of the shell running in this session."""

@@ -230,6 +230,9 @@ class TabWatcher:
                 except OSError:
                     pass
             project = self.icon_resolver.find_project_root(cwd).name if cwd else ""
+            if agent != agent_identity.USER:
+                # Same name as the tab title: set-job first, then the session's own name.
+                project = state.get("job_name") or (state.get("session_name") if state.get("agent") else None) or project
 
             grp = self.group_mgr.get_tab_group(s_key)
             rows.append({

@@ -1,4 +1,4 @@
-"""State management for tracking tab and session activities.
+"""Per-tab state: what each tab and its session are doing.
 
 The state file is shared by many short-lived processes (shell preexec/precmd hooks,
 Claude Code and agy hooks, the daemon), so every read-modify-write happens under an

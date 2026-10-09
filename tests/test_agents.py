@@ -444,3 +444,84 @@ class TestUiThrottle(unittest.TestCase):
         colors = len(term.colors)
         claude.handle_event("Notification", {"cwd": "/tmp", "notification_type": "idle_prompt"})
         self.assertEqual(len(term.colors), colors)  # nothing re-sent when nothing changed
+
+
+class TestUltracodeAndBackground(unittest.TestCase):
+    def setUp(self):
+        StateManager().clear_session(KEY)
+        self.term = RecordingTerminal()
+        self.claude = ClaudeHandler(term=self.term)
+
+    def _transcript(self, entries):
+        import tempfile
+        f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        f.write("\n".join(json.dumps(e) for e in entries))
+        f.close()
+        return f.name
+
+    def _ts(self, offset=0):
+        return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() + offset))
+
+    def test_ultracode_on_off(self):
+        on = self._transcript([
+            {"type": "user", "timestamp": self._ts(), "message": {"role": "user", "content":
+             "<command-name>/effort</command-name>\n<command-message>effort</command-message>\n<command-args>ultracode</command-args>"}},
+            {"type": "user", "timestamp": self._ts(), "message": {"role": "user", "content":
+             "<local-command-stdout>Ultracode on (this session only): dynamic workflows on every task.</local-command-stdout>"}},
+        ])
+        self.claude.handle_event("UserPromptSubmit", {"cwd": "/tmp", "transcript_path": on})
+        self.assertTrue(StateManager().get_session(KEY).get("ultracode"))
+        self.assertIn("🚀 ULTRA", self.term.titles[-1])
+        off = self._transcript([{"type": "attachment", "timestamp": self._ts(1), "attachment": {"type": "ultra_effort_exit"}}])
+        self.claude.handle_event("UserPromptSubmit", {"cwd": "/tmp", "transcript_path": off})
+        self.assertFalse(StateManager().get_session(KEY).get("ultracode"))
+        self.assertNotIn("ULTRA", self.term.titles[-1])
+
+    def test_typed_word_is_not_ultracode(self):
+        path = self._transcript([{"type": "user", "message": {"role": "user", "content": "we're not aware of ultracode"}},
+                                 {"type": "attachment", "attachment": {"type": "workflow_keyword_request"}}])
+        self.claude.handle_event("UserPromptSubmit", {"cwd": "/tmp", "transcript_path": path})
+        self.assertFalse(StateManager().get_session(KEY).get("ultracode"))
+
+    def test_stale_ultracode_ignored_after_resume(self):
+        path = self._transcript([{"type": "attachment", "timestamp": "2020-01-01T00:00:00.000Z",
+                                  "attachment": {"type": "ultra_effort_enter", "reminderType": "full"}}])
+        self.claude.handle_event("SessionStart", {"cwd": "/tmp", "source": "resume", "transcript_path": path})
+        self.claude.handle_event("UserPromptSubmit", {"cwd": "/tmp", "transcript_path": path})
+        self.assertFalse(StateManager().get_session(KEY).get("ultracode"))
+
+    def test_turn_with_background_work_is_not_done(self):
+        self.claude.handle_event("UserPromptSubmit", {"cwd": "/tmp"})
+        self.claude.handle_event("PostToolUse", {"cwd": "/tmp", "tool_name": "Workflow",
+                                                 "tool_response": {"status": "async_launched", "taskId": "w123",
+                                                                   "taskType": "local_workflow", "workflowName": "audit"}})
+        self.assertEqual(StateManager().get_session(KEY)["background"], {"workflow": 1})
+        self.claude.handle_event("Stop", {"cwd": "/tmp", "last_assistant_message": "launched",
+                                          "background_tasks": [
+                                              {"id": "w123", "type": "workflow", "status": "running", "name": "audit"},
+                                              {"id": "bq1", "type": "shell", "status": "running", "command": "make"}],
+                                          "session_crons": []})
+        sess = StateManager().get_session(KEY)
+        self.assertEqual(sess["agent_status"], "background")
+        self.assertIn("1 workflow, 1 shell running", self.term.titles[-1])
+        # completion notification arrives as a new prompt, then the turn ends with nothing in flight
+        self.claude.handle_event("UserPromptSubmit", {"cwd": "/tmp", "prompt":
+                                 "<task-notification><task-id>w123</task-id><status>completed</status></task-notification>"})
+        self.assertEqual(StateManager().get_session(KEY)["background"], {"shell": 1})
+        self.claude.handle_event("Stop", {"cwd": "/tmp", "last_assistant_message": "all done",
+                                          "background_tasks": [], "session_crons": []})
+        self.assertEqual(StateManager().get_session(KEY)["agent_status"], "done")
+
+    def test_workflow_agents_survive_main_stop(self):
+        self.claude.handle_event("SubagentStart", {"cwd": "/tmp", "agent_id": "a1", "agent_type": "workflow-subagent"})
+        self.claude.handle_event("Stop", {"cwd": "/tmp", "last_assistant_message": "x",
+                                          "background_tasks": [{"id": "w9", "type": "workflow", "status": "running"}]})
+        self.assertEqual(StateManager().get_session(KEY).get("subagents"), ["a1"])
+
+    def test_subagent_tool_chatter_is_cheap(self):
+        self.claude.handle_event("UserPromptSubmit", {"cwd": "/tmp"})
+        n = len(self.term.titles)
+        for i in range(20):
+            self.claude.handle_event("PreToolUse", {"cwd": "/tmp", "agent_id": "a1", "agent_type": "workflow-subagent",
+                                                    "tool_name": "Read", "tool_input": {"file_path": f"/f{i}"}})
+        self.assertLessEqual(len(self.term.titles) - n, 1)

@@ -1,4 +1,4 @@
-"""Shell command classifier for task recognition and metadata extraction."""
+"""Sorts shell commands into task types (build, git, transfer, ...) and pulls out a short label."""
 
 import os
 from typing import Any, Dict, List, Optional

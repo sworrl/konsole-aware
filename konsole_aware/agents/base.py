@@ -13,7 +13,7 @@ from konsole_aware.tabs.title import TitleComposer
 from konsole_aware.terminal import get_terminal
 from konsole_aware.terminal.base import BaseTerminal
 
-# Status -> (tab colour key, badge text)
+# Status -> (tab color key, badge text)
 STATUS_STYLE = {
     "thinking": ("busy", "THINK"),
     "tool": ("busy", "TOOL"),
@@ -26,8 +26,12 @@ STATUS_STYLE = {
     "error": ("error", "ERR"),
     "blocked": ("blocked", "BLOCKED"),
     "limited": ("limited", "LIMIT"),
+    "background": ("busy", "BG"),
     "idle": ("idle", "READY"),
 }
+
+# Per-pane segment when several agents share one split tab: project, agent, state.
+SPLIT_SEGMENT_ORDER = ("job", "identity", "status")
 
 # Statuses during which an agent turn is in progress.
 ACTIVE_STATUSES = ("thinking", "tool", "busy", "subagents", "compacting", "waiting")
@@ -83,6 +87,7 @@ class BaseAgentHandler(ABC):
         _, agent_pid = agent_identity.find_agent_ancestor(self.agent_name)
         ancestors = agent_identity.ancestor_pids()
         argv_mode = agent_identity.agent_mode_from_pid(agent_pid) if mode is None else None
+        name = agent_identity.session_name(self.agent_name, agent_pid)
         before: Dict[str, Any] = {}
 
         def _apply(sess: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -98,7 +103,8 @@ class BaseAgentHandler(ABC):
             if mode_now is None:
                 same_agent = sess.get("agent") == self.agent_name and sess.get("agent_pid") == agent_pid
                 mode_now = sess.get("agent_mode") if same_agent and sess.get("agent_mode") else argv_mode
-            updates: Dict[str, Any] = {"agent": self.agent_name, "hooked": True}
+            # A named session (Claude's /rename, agy --project) is shown as the project.
+            updates: Dict[str, Any] = {"agent": self.agent_name, "hooked": True, "session_name": name}
             if agent_pid:
                 updates["agent_pid"] = agent_pid
             if mode_now:
@@ -129,6 +135,7 @@ class BaseAgentHandler(ABC):
                 "agent": None,
                 "agent_pid": None,
                 "agent_mode": None,
+                "session_name": None,
                 "agent_status": None,
                 "detail": "",
                 "turn_start": None,
@@ -150,9 +157,9 @@ class BaseAgentHandler(ABC):
         icon_status: Optional[str] = None,
         **state: Any,
     ) -> str:
-        """Update state, tab title, colour and badge for this agent's current status."""
+        """Update state, tab title, color and badge for this agent's current status."""
         updates: Dict[str, Any] = {
-            "status": status if status in ACTIVE_STATUSES or status in ("done", "error", "blocked", "limited", "idle") else "busy",
+            "status": status if status in ACTIVE_STATUSES or status in ("done", "error", "blocked", "limited", "idle", "background") else "busy",
             "agent_status": status,
             "task_name": self.agent_name,
             "task_type": "agent",
@@ -184,7 +191,11 @@ class BaseAgentHandler(ABC):
         m_tag = agent_identity.model_tag(sess.get("model"), sess.get("effort"))
         label = f"{ident.get('label', '')} {m_tag}".strip()
         badge_text = f"{label} · {badge}"
-        self._apply_ui(sess, status, title, color, badge_text, ident.get("icon", ""))
+        compact = self.composer.compose(
+            session_key=self.session_key, task_category="agent", status=icon_status or status, detail=detail,
+            cwd=cwd, agent=self.agent_name, mode=mode, order=list(SPLIT_SEGMENT_ORDER),
+        )
+        self._apply_ui(sess, status, title, color, badge_text, ident.get("icon", ""), compact=compact)
         return title
 
     # Tool-call titles change several times a second while an agent works. Each change on
@@ -193,7 +204,8 @@ class BaseAgentHandler(ABC):
     # are never re-sent. State changes (waiting/done/error/...) always go through.
     _THROTTLED = ("tool",)
 
-    def _apply_ui(self, sess: Dict[str, Any], status: str, title: str, color: str, badge: str, icon: str) -> None:
+    def _apply_ui(self, sess: Dict[str, Any], status: str, title: str, color: str, badge: str, icon: str,
+                  compact: str = "") -> None:
         last = sess.get("ui") or {}
         now = time.time()
         min_gap = float(self.config.get("title_update_min_interval", 1.0))
@@ -207,7 +219,64 @@ class BaseAgentHandler(ABC):
         if last.get("badge") != badge:
             self.term.set_badge(badge, enabled=True, icon=icon)
         self.state_mgr.set_session(self.session_key, ui={
-            "status": status, "title": title, "color": color, "badge": badge, "at": now})
+            "status": status, "title": title, "color": color, "badge": badge, "at": now, "compact": compact})
+        self._sync_split_tab()
+
+    # ------------------------------------------------------------- split tabs
+    def _tab_panes(self) -> list:
+        """Session numbers of every pane in this session's tab (cached for 10 s)."""
+        num = getattr(self.term, "get_session_num", lambda: None)()
+        service = getattr(self.term, "service", None)
+        if num is None or not service:
+            return []
+        cache = self.state_mgr.get_session(self.session_key).get("tab_panes") or {}
+        if time.time() - float(cache.get("at", 0) or 0) < 10:
+            return cache.get("panes") or []
+        from konsole_aware.terminal import dbus
+        panes: list = []
+        win = getattr(self.term, "find_window", lambda: None)()
+        if win:
+            sessions = (dbus.call(service, win, "org.kde.konsole.Window.sessionList") or "").split()
+            hierarchy = (dbus.call(service, win, "org.kde.konsole.Window.viewHierarchy") or "").split()
+            panes = next((t for t in dbus.split_tabs(sessions, hierarchy) if str(num) in t), [])
+        self.state_mgr.set_session(self.session_key, tab_panes={"at": time.time(), "panes": panes})
+        return panes
+
+    def _sync_split_tab(self) -> None:
+        """Konsole shows only the focused pane's title for a split tab, and clears the tab
+        color when panes disagree. Write one combined title (project first per pane) and
+        one color to every pane, so all agents in the tab stay visible."""
+        if not self.config.get("combine_split_tab_titles", True):
+            return
+        panes = self._tab_panes()
+        if len(panes) < 2:
+            return
+        service = self.term.service
+        from konsole_aware.terminal.konsole import KonsoleTerminal, read_cwd
+        segs, colors = [], []
+        def _rank(pane: str) -> int:
+            return agent_identity.agent_rank(self.state_mgr.get_session(f"{service}:/Sessions/{pane}").get("agent"))
+        for pane in sorted(panes, key=_rank):
+            p_state = self.state_mgr.get_session(f"{service}:/Sessions/{pane}")
+            ui = p_state.get("ui") or {}
+            if p_state.get("agent") and ui.get("compact"):
+                segs.append(ui["compact"])
+                colors.append((ui.get("status"), ui.get("color")))
+            else:
+                p_term = KonsoleTerminal(service=service, session_path=f"/Sessions/{pane}")
+                segs.append(self.composer.compose(
+                    session_key=p_term.get_session_id(), task_category="idle", status="idle",
+                    cwd=read_cwd(p_term.get_process_id()) or None, agent=agent_identity.USER,
+                    order=["job", "identity", "status"]))
+        combined = " │ ".join(s for s in segs if s)
+        rank = {"waiting": 0, "error": 1, "blocked": 1, "limited": 1, "tool": 2, "thinking": 2, "subagents": 2,
+                "compacting": 2, "background": 2, "done": 3, "idle": 4}
+        color = sorted(colors, key=lambda c: rank.get(c[0], 3))[0][1] if colors else None
+        for pane in panes:
+            p_term = KonsoleTerminal(service=service, session_path=f"/Sessions/{pane}")
+            p_term.set_title(combined, role=0)
+            if color:
+                p_term.set_tab_color(color)
 
     def render_user_session(self, cwd: Optional[str] = None) -> None:
         """Show the tab as a plain user shell (no agent)."""

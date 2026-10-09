@@ -1,16 +1,17 @@
-# Security Policy
+# Security
 
-konsole-aware runs as hooks inside your coding agents and shell, and optionally as a library loaded into Konsole.
-Please report anything that could let it run unintended commands, leak data, or change agent permissions.
+konsole-aware runs as hooks inside your coding agents and your shell, and as a library loaded into Konsole. Please
+report anything that could make it run a command you didn't ask for, leak data, or change what an agent is allowed
+to do.
 
 ## Reporting
 
-Use GitHub's **private vulnerability reporting** on this repository (Security → Report a vulnerability). Please do not
-open a public issue for security problems. Include steps to reproduce and the affected version or commit.
+Please use GitHub's private vulnerability reporting on this repository (Security, then Report a vulnerability) and not
+a public issue. Include the steps to reproduce it and the version or commit you're on.
 
-## Design commitments
+## What it does and doesn't do
 
-- Agent hooks are observational: they never approve, deny or rewrite tool calls.
-- State is kept in a private directory (`$XDG_RUNTIME_DIR/konsole-aware`, mode 0700).
+- The agent hooks only watch. They never approve, deny or rewrite a tool call.
+- Tab state is kept in `$XDG_RUNTIME_DIR/konsole-aware`, which only you can read (mode 0700).
 - Nothing is sent over the network.
-- The Konsole menu library strips itself from `LD_PRELOAD` so child processes do not load it.
+- The Konsole library removes itself from `LD_PRELOAD` when it loads, so the programs you run in your tabs don't load it.

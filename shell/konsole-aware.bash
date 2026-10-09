@@ -185,7 +185,7 @@ _konsole_aware_pc_install() {
         done
         PROMPT_COMMAND=("$pre" ${out[@]+"${out[@]}"} "$arm")
     else
-        # Newline separators: robust against user strings ending in ';' or '&'.
+        # Newline separators: safe with user strings ending in ';' or '&'.
         e=${PROMPT_COMMAND:-}
         e=${e//"$nl$boot"/}; e=${e//"$nl$arm"/}
         e=${e#"$boot$nl"}; e=${e#"$pre$nl"}; e=${e#"$pre; "}

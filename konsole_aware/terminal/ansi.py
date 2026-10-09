@@ -52,6 +52,9 @@ class AnsiTerminal(BaseTerminal):
         Never falls back to stdout unless stdout is itself a terminal: agent hooks'
         stdout is parsed as JSON (and for some events injected into the model context).
         """
+        if os.environ.get("KONSOLE_AWARE_IS_HOOK"):
+            return False
+
         targets = [self.tty_path] if self.tty_path else ["/dev/tty", _ancestor_tty()]
         for target in targets:
             if not target:
@@ -68,7 +71,7 @@ class AnsiTerminal(BaseTerminal):
             finally:
                 os.close(fd)
         try:
-            if sys.stdout.isatty():
+            if sys.stdout.isatty() and not os.environ.get("KONSOLE_AWARE_IS_HOOK"):
                 sys.stdout.write(code)
                 sys.stdout.flush()
                 return True

@@ -42,8 +42,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "error": "#ef4444",      # Red: command failed / error
         "waiting": "#8b5cf6",    # Purple: waiting for user input / permission
         "idle": "#3b82f6",       # Blue: interactive prompt / idle
-        "blocked": "#db2777",
-        "limited": "#f97316",    # Orange: usage limit reached (resumes when the limit resets)    # Pink: response blocked by the model provider's safeguards
+        "blocked": "#db2777",    # Pink: response blocked by the model provider's safeguards
+        "limited": "#f97316",    # Orange: usage limit reached (resumes when the limit resets)
         "reset": "#000000",      # Default Konsole tab color
     },
     "emojis": {
@@ -73,14 +73,25 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Agent identity: every tab shows which agent runs in it (✳️ CLAUDE, 🪐 AGY, ...)
     # or 👤 USER when it is a plain shell with no agent.
     "show_agent_identity": True,
-    "show_agent_mode": True,
+    "show_agent_mode": True,         # Show permission / execution mode (📋 PLAN, ✏️ EDITS, ⚡ BYPASS, ...)
     "show_agent_model": True,        # Show model and effort (💎 Fable 5.1·hi, Opus 5.5·max, ...)
-    "model_icons": {},               # e.g. {"fable": "💎", "opus": "🟣"}; "" hides the icon         # Show permission / execution mode (📋 PLAN, ✏️ EDITS, ⚡ BYPASS, ...)
+    "model_icons": {},               # e.g. {"fable": "💎", "opus": "🟣"}; "" hides the icon
     "agent_identities": {},          # Per-agent overrides: {"claude": {"icon": "✳️", "label": "CLAUDE"}}
     "agent_order": ["claude", "agy", "gemini", "codex", "aider", "copilot", "cursor", "opencode"],
     # Snapping: when an agent starts in a tab, move that tab next to the other tabs
     # of the same project in the same window (agents side by side).
     "auto_snap_agents": True,
+    "combine_split_tab_titles": True,  # split tab with several agents: one combined title on every pane
+    # Patterned tab backgrounds, painted by the context-menu library inside Konsole:
+    # "project-status" (two-tone: project color | agent/status color), "project" (solid
+    # project color), "gradient", "two-tone", "stripes", "rainbow", or "none".
+    "tab_pattern": "project-status",
+    "tab_pattern_opacity": 0.6,      # strength of unselected tab fills; the selected tab is drawn at full strength
+    "terminal_tint": 0.2,            # tint each terminal's background with its tab's colors (0 turns it off, max 0.5)
+    "terminal_band": True,           # a strip of the tab's colors along the top of its terminal
+    # Colors belong to the tab and follow it when you drag it. Set true to color tabs by
+    # their position instead (first tab blue, second green, ...), so dragging recolors them.
+    "tab_colors_follow_position": False,
     "agent_watchdog": True,          # End a turn when the agent is interrupted (Esc) or exits without a hook
     "snap_include_user_sessions": True,  # Pull plain shells of the same project into the cluster too
     "tab_color_mode": "agent",      # "agent": distinct brand color per agent identity; "status": state color; "agent_status": agent color while running, status color on exit

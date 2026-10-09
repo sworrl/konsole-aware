@@ -1,39 +1,43 @@
 # Contributing to konsole-aware
 
-Thanks for helping. Bug reports, agent and terminal integrations, and fixes are all welcome.
+Bug reports, new agents, other terminals and fixes are all welcome.
 
 ## Setup
 
 ```bash
 git clone https://github.com/sworrl/konsole-aware.git
 cd konsole-aware
-python3 -m pytest -q        # hermetic test suite
-make -C menu_hook           # optional: build the Konsole context-menu library (needs Qt 6 dev headers)
+python3 -m pytest -q        # the tests don't need Konsole and don't touch your setup
+make -C menu_hook           # optional: builds the right-click menu library (needs the Qt 6 headers)
 ```
 
-The package uses only the Python standard library (plus GLib's `gi` when present). Run it straight from the clone
+The Python side only uses the standard library, plus GLib's `gi` when it's installed. Run it straight from the clone
 with `bin/konsole-aware`.
 
-## Guidelines
+## Ground rules
 
-- **Hooks must stay observational and fast.** Agent hooks run synchronously inside Claude Code and agy. Never print
-  to stdout from a Claude hook (it reaches the model's context), never return a permission decision, and keep each
-  hook well under a second.
-- **Never write to the user's terminal from tests.** `tests/conftest.py` redirects config and state and disables
-  D-Bus; keep new tests hermetic.
-- **No blind overwrites of user files.** Installer changes must merge and be reversible by `uninstall`.
-- **Konsole internals** in `menu_hook/` must be resolved at runtime and degrade gracefully when missing.
-- Match the surrounding style; add a test for every behavior change.
+- The agent hooks only watch, and they have to be quick. They run inside Claude Code and agy while the agent waits.
+  Don't print to stdout from a Claude hook (it ends up in the model's context), don't return a permission decision,
+  and keep each hook well under a second.
+- Tests never write to your real terminal. `tests/conftest.py` points config and state at a temp folder and turns
+  D-Bus off; new tests should do the same.
+- The installer never overwrites a user's file. It merges its own entries in, and `uninstall` takes only those back
+  out.
+- Anything in `menu_hook/` that reaches into Konsole's internals is looked up when Konsole starts, and the feature
+  that needs it is turned off if it isn't there. It must never crash Konsole.
+- Don't open windows on the desktop to test the menu library. Run Konsole with `QT_QPA_PLATFORM=offscreen` and use
+  `KONSOLE_AWARE_GRAB` to save a picture of it (see the README's environment variables).
+- Match the code around your change, and add a test for every change in behavior.
 
 ## Adding an agent
 
-1. Add an entry to `DEFAULT_IDENTITIES` in `konsole_aware/agents/identity.py` (label, icon, color, process names).
-2. If the agent has lifecycle hooks, add a handler next to `agents/claude.py` / `agents/agy.py` built on
-   `BaseAgentHandler.render()`, and register it in `install.py`.
-3. Add tests for its event mapping and for process detection.
+1. Add it to `DEFAULT_IDENTITIES` in `konsole_aware/agents/identity.py`: label, icon, color and process names.
+2. If the agent has lifecycle hooks, add a handler next to `agents/claude.py` and `agents/agy.py`, built on
+   `BaseAgentHandler.render()`, and register its hooks in `install.py`.
+3. Add tests for its event mapping and its process detection.
 
 ## Pull requests
 
-- One topic per PR, with a short description of the user-visible change.
-- `python3 -m pytest -q` must pass; CI also builds the menu library.
+- One topic per pull request, with a short note on what changes for users.
+- `python3 -m pytest -q` has to pass. CI also builds the menu library.
 - Update `README.md` and `CHANGELOG.md` when behavior or options change.

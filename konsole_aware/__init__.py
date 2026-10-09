@@ -1,3 +1,3 @@
-"""konsole-aware: Terminal and tab awareness system for Konsole and Linux terminals."""
+"""konsole-aware: shows what each Konsole tab is doing (agents, tasks, projects)."""
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"

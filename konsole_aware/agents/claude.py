@@ -5,7 +5,7 @@ SessionStart / SessionEnd, UserPromptSubmit, PreToolUse / PostToolUse /
 PostToolUseFailure, PermissionRequest / PermissionDenied, Notification
 (permission_prompt, idle_prompt, elicitation_dialog), Stop / StopFailure,
 SubagentStart / SubagentStop, PreCompact / PostCompact, Elicitation /
-ElicitationResult — and every permission mode (default, plan, acceptEdits, auto,
+ElicitationResult. It also handles every permission mode (default, plan, acceptEdits, auto,
 dontAsk, bypassPermissions), which every payload carries as `permission_mode`.
 
 The hook is purely observational: it never prints anything (stdout of
@@ -16,11 +16,13 @@ returns a permission decision.
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from konsole_aware.agents import identity as agent_identity
+from konsole_aware.agents import activity
 from konsole_aware.agents.base import BaseAgentHandler, short
 
 # Canonical event names, accepting snake_case aliases.
@@ -219,8 +221,17 @@ class ClaudeHandler(BaseAgentHandler):
                 self.render("idle", "cleared", cwd=cwd, mode=mode)
             else:
                 self.detach()
+                self.state_mgr.set_session(self.session_key, bg_ids={}, background={}, ultracode=False)
                 self.render_user_session(cwd=cwd)
             return {}
+
+        # Tool events from inside subagents (a workflow can run dozens at once) only change a
+        # detail line. Skip them while the tab was redrawn under a second ago, before taking
+        # any lock or touching D-Bus, so these hooks stay fast under load.
+        if payload.get("agent_id") and event in ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionDenied"):
+            last_ui = (self.state_mgr.get_session(self.session_key).get("ui") or {})
+            if time.time() - float(last_ui.get("at", 0) or 0) < float(self.config.get("title_update_min_interval", 1.0)):
+                return {}
 
         before = self.attach(mode=mode)
         if before.get("nested"):
@@ -228,6 +239,7 @@ class ClaudeHandler(BaseAgentHandler):
         if payload.get("transcript_path") and payload["transcript_path"] != before.get("transcript_path"):
             self.state_mgr.set_session(self.session_key, transcript_path=payload["transcript_path"])
         self._track_model(event, payload, before)
+        self._track_background(event, payload)
         prev = before.get("agent_status") or before.get("status")
         in_subagent = bool(payload.get("agent_id")) and self._subagent_count() > 0
         if before.get("new_agent"):
@@ -363,7 +375,11 @@ class ClaudeHandler(BaseAgentHandler):
 
         elif event == "Stop":
             dur = self.turn_duration()
-            self._subagents_clear()
+            bg = self.state_mgr.get_session(self.session_key).get("background") or {}
+            if not bg:
+                # Workflow and background agents keep running after the main turn ends;
+                # only forget them when Claude Code reports nothing in flight.
+                self._subagents_clear()
             events = transcript_safeguard_events(transcript_tail(payload.get("transcript_path")))
             limit = find_usage_limit(payload.get("last_assistant_message"))
             if limit:
@@ -378,8 +394,12 @@ class ClaudeHandler(BaseAgentHandler):
             if not switch and events["fallback"]:
                 switch = {"to": "fallback model", "category": events["fallback"]}
             note = f" · 🛡️ on {switch['to']}" if switch.get("to") else ""
+            if bg:
+                # The turn ended but workflows/agents/shells are still going; it is not done yet.
+                self.render("background", f"{activity.describe_counts(bg)} running", cwd=cwd, mode=mode)
+                return {}
             self.render("done", (f"ready ({dur})" if dur else "ready") + note, cwd=cwd, mode=mode)
-            self.alert("Claude Code Complete",
+            self.alert("Claude Finished",
                        f"Claude finished{' in ' + dur if dur else ''} in {self.session_label()} ({project})"
                        + (f" (switched to {switch['to']} after a flag)" if switch.get("to") else ""))
 
@@ -399,7 +419,7 @@ class ClaudeHandler(BaseAgentHandler):
             error = short(payload.get("error") or payload.get("error_type") or "API error", 32)
             self.state_mgr.finish_task(self.session_key, exit_code=1, status="error")
             self.render("error", f"failed: {error}", cwd=cwd, mode=mode)
-            self.alert("Claude Code Failed",
+            self.alert("Claude Failed",
                        f"Claude stopped with an error ({error}) in {self.session_label()} ({project})",
                        urgency="critical", is_error=True)
 
@@ -419,27 +439,72 @@ class ClaudeHandler(BaseAgentHandler):
                    urgency="critical", is_error=True, dedupe_key=f"blocked:{category}")
 
     def _track_model(self, event: str, payload: Dict[str, Any], before: Dict[str, Any]) -> None:
-        """Keep the tab's model and effort current (shown as e.g. '💎 Fable 5.1·hi')."""
+        """Keep the tab's model, effort and ultracode state current."""
         if payload.get("agent_id"):
             return  # subagents may run other models; the tab shows the main session's
         model = effort = None
+        updates: Dict[str, Any] = {}
         if event == "SessionStart":
             model = payload.get("model")
+            # Ultracode never survives a restart or resume; only `--effort ultracode` starts with it on.
+            _, pid = agent_identity.find_agent_ancestor(self.agent_name)
+            updates["ultracode"] = activity.ultracode_from_argv(agent_identity._read_argv(pid) if pid else [])
+            updates["ultracode_since"] = time.time()
         elif event == "PostModelSwitch":
             model = payload.get("to_model")
-        if event in ("SessionStart", "UserPromptSubmit", "Stop", "StopFailure") and not model:
-            t_model, t_effort = latest_model_effort(payload.get("transcript_path"))
-            model, effort = t_model, t_effort
+        if event in ("SessionStart", "UserPromptSubmit", "Stop", "StopFailure"):
+            found = activity.scan_transcript(payload.get("transcript_path"))
+            if not model:
+                model, effort = found["model"], found["effort"]
+            since = float(before.get("ultracode_since") or 0)
+            # Entries written before this process started (a resume) describe the old process.
+            if found["ultracode"] is not None and event != "SessionStart" and (
+                    not since or not found["ultracode_at"] or found["ultracode_at"] >= since - 2):
+                updates["ultracode"] = found["ultracode"]
+        payload_effort = payload.get("effort")
+        if isinstance(payload_effort, dict) and payload_effort.get("level"):
+            effort = payload_effort["level"]
         env_effort = os.environ.get("CLAUDE_EFFORT")
         if env_effort:
             effort = env_effort
-        updates: Dict[str, Any] = {}
         if model and model != before.get("model"):
             updates["model"] = model
         if effort and effort != before.get("effort"):
             updates["effort"] = effort
+        if updates.get("ultracode") == before.get("ultracode") and "ultracode_since" not in updates:
+            updates.pop("ultracode", None)
         if updates:
             self.state_mgr.set_session(self.session_key, **updates)
+
+    # ------------------------------------------------------------ background work
+    def _bg_update(self, fn) -> Dict[str, Any]:
+        def _apply(sess: Dict[str, Any]) -> Dict[str, Any]:
+            ids = dict(sess.get("bg_ids") or {})
+            fn(ids)
+            return {"bg_ids": ids, "background": activity.counts_from_ids(ids)}
+        return self.state_mgr.update_session(self.session_key, _apply)
+
+    def _track_background(self, event: str, payload: Dict[str, Any]) -> None:
+        if payload.get("agent_id"):
+            return
+        if event == "PostToolUse":
+            task = activity.launched_task(payload.get("tool_name") or "", payload.get("tool_response"))
+            if task and task["id"]:
+                self._bg_update(lambda ids: ids.__setitem__(task["id"], {"type": task["type"], "name": task["name"]}))
+        elif event == "UserPromptSubmit":
+            done = activity.finished_task_ids(payload.get("prompt"))
+            if done:
+                self._bg_update(lambda ids: [ids.pop(t, None) for t in done])
+        elif event in ("Stop", "StopFailure") and "background_tasks" in payload:
+            # Claude Code's own list of in-flight work is the truth at the end of a turn.
+            tasks = payload.get("background_tasks") or []
+            ids = {str(t.get("id")): {"type": activity.TYPE_LABELS.get(str(t.get("type")), str(t.get("type") or "task")),
+                                      "name": str(t.get("name") or t.get("agent_type") or "")}
+                   for t in tasks if isinstance(t, dict) and t.get("id")}
+            crons = payload.get("session_crons") or []
+            self.state_mgr.set_session(self.session_key, bg_ids=ids,
+                                       background=activity.counts_from_background_tasks(tasks),
+                                       scheduled=len(crons) if isinstance(crons, list) else 0)
 
     def _render_limited(self, limit: str, cwd: str, mode: Optional[str], project: str) -> None:
         self.state_mgr.finish_task(self.session_key, exit_code=1, status="limited")

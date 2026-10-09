@@ -33,8 +33,11 @@ CLAUDE_EVENTS = [
 ]
 
 # Antigravity (agy) hook events. Tool events use the grouped matcher form.
+# PreToolUse is intentionally omitted: Antigravity treats PreToolUse as an authorization gate
+# requiring an explicit decision ("allow"/"deny"/"ask"). An observational hook returning {}
+# causes Antigravity to deny all tool executions. PostToolUse is observational and safe.
 AGY_FLAT_EVENTS = ["PreInvocation", "Stop"]
-AGY_TOOL_EVENTS = ["PreToolUse", "PostToolUse"]
+AGY_TOOL_EVENTS = ["PostToolUse"]
 AGY_HOOK_NAME = "konsole-aware"
 
 WRAPPER_MARKER = "# konsole-aware konsole wrapper"
@@ -112,7 +115,7 @@ def merge_claude_hooks(settings: Dict[str, Any], hook_bin: str) -> Dict[str, Any
     hooks = strip_claude_hooks(settings.get("hooks") or {})
     for event in CLAUDE_EVENTS:
         hooks.setdefault(event, []).append({
-            "hooks": [{"type": "command", "command": f"{hook_bin} agent claude {event}", "timeout": 5}]
+            "hooks": [{"type": "command", "command": f"{hook_bin} agent claude {event}", "timeout": 10}]
         })
     return {**settings, "hooks": hooks}
 
@@ -228,7 +231,11 @@ def _install_menu_hook(repo_root: Path, home: Path, local_bin: Path, out: Callab
     local_lib = home / ".local" / "lib"
     local_lib.mkdir(parents=True, exist_ok=True)
     target_so = local_lib / "libkonsole_aware_menu.so"
-    shutil.copy2(prebuilt, target_so)
+    # Never overwrite the library in place: a running Konsole has it mapped, and rewriting
+    # mapped pages can crash or hang it. Write a new file and rename it over the old one.
+    tmp_so = target_so.with_name(f".{target_so.name}.tmp.{os.getpid()}")
+    shutil.copy2(prebuilt, tmp_so)
+    os.replace(tmp_so, target_so)
     out(f"✓ Installed context menu hook library: {target_so}")
 
     real_konsole = shutil.which("konsole", path="/usr/local/bin:/usr/bin:/bin") or "/usr/bin/konsole"

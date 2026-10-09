@@ -1,5 +1,5 @@
 [Unit]
-Description=Konsole Aware - Terminal & Tab Status Monitor Daemon
+Description=konsole-aware tab status monitor
 After=graphical-session.target
 
 [Service]

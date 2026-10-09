@@ -1,4 +1,4 @@
-"""Tab grouping, anchoring, and project-based organization management."""
+"""Tab groups, pinned (anchored) tabs, and grouping tabs by project."""
 
 import copy
 import fcntl

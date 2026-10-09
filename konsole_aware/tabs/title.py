@@ -1,4 +1,4 @@
-"""Tab title composer supporting permanent job/project context, task color dots, and status indicators."""
+"""Builds tab titles: project, agent, model, mode, task dot and status."""
 
 import os
 from pathlib import Path
@@ -23,6 +23,10 @@ DEFAULT_TASK_DOTS = {
     "idle": "⚫",
 }
 
+# Order of title segments. Project first, so each tab reads as WHAT is being worked on,
+# then WHO is working on it (agent, model, mode, background activity), then the state.
+DEFAULT_TITLE_ORDER = ["job", "pin", "group", "identity", "model", "mode", "activity", "dot", "status"]
+
 STATUS_ICONS = {
     "thinking": "🧠",
     "tool": "🛠️",
@@ -34,6 +38,7 @@ STATUS_ICONS = {
     "compacting": "🗜️",
     "blocked": "🛡️",
     "limited": "⌛",
+    "background": "⧗",
     "subagents": "🤖",
 }
 
@@ -77,6 +82,10 @@ class TitleComposer:
             sess = self.state_mgr.get_session(session_key)
             if sess and sess.get("job_name"):
                 return sess["job_name"]
+            # The agent session's own name (Claude /rename or --name, agy --project), while
+            # that agent is still running in the tab.
+            if sess and sess.get("session_name") and sess.get("agent"):
+                return sess["session_name"]
 
         source = self.config.get("job_name_source", "auto")
         if source == "cwd":
@@ -128,13 +137,13 @@ class TitleComposer:
         icon: Optional[str] = None,
         agent: Optional[str] = None,
         mode: Optional[str] = None,
+        order: Optional[list] = None,
     ) -> str:
         """
-        Compose full tab title. The agent identity comes first so it stays visible
-        when Konsole elides long tab titles:
-        Example: ✳️ CLAUDE [🐍 konsole_aware] 🧠 thinking...
-        Example: 🪐 AGY ⚡ BYPASS [🧪 konsole_aware/tests] 🛠️ cmd(cargo test)
-        Example: 👤 USER [🦀 indexer] 🟡 ✅ cargo build (42s)
+        Compose full tab title, segments in `title_order` (project first by default):
+        Example: [🐍 konsole_aware] ✳️ CLAUDE Opus 5.5·hi 🟠 🧠 thinking...
+        Example: [🧪 konsole_aware/tests] 🪐 AGY ⚡ BYPASS 🔵 🛠️ cmd(cargo test)
+        Example: [🦀 indexer] 🟡 ✅ cargo build (42s)
         """
         always_show_job = self.config.get("always_show_job", True)
         show_task_dot = self.config.get("show_task_dot", True)
@@ -166,58 +175,56 @@ class TitleComposer:
         if resolved_job and len(resolved_job) > max_job:
             resolved_job = resolved_job[:max_job - 1] + "…"
 
-        parts = []
+        seg: Dict[str, str] = {}
 
-        # 1. Anchored pin
+        # Project / job: read first, so you can see WHAT each tab is working on.
+        if always_show_job and (resolved_job or resolved_icon):
+            if resolved_icon and resolved_job:
+                seg["job"] = f"[{resolved_icon} {resolved_job}]"
+            else:
+                seg["job"] = f"[{resolved_job or resolved_icon}]"
+
         if session_key and self.group_mgr.is_anchored(session_key):
-            parts.append("📌")
+            seg["pin"] = "📌"
 
-        # 2. Agent identity (✳️ CLAUDE / 🪐 AGY / 👤 USER) and its mode
-        is_agent = agent != agent_identity.USER
-        show_user_tag = self.config.get("show_user_identity", False)
-        if show_identity and (is_agent or show_user_tag or task_category == "idle"):
-            parts.append(agent_identity.identity_tag(agent))
-        if is_agent:
-            m_tag = agent_identity.model_tag(sess.get("model"), sess.get("effort"))
-            if m_tag:
-                parts.append(m_tag)
-        if show_mode and is_agent:
-            tag = agent_identity.mode_tag(mode)
-            if tag:
-                parts.append(tag)
-
-        # 3. Group tag if assigned
         if session_key:
             grp = self.group_mgr.get_tab_group(session_key)
             if grp:
                 g_icon = grp.get("icon", "")
                 g_name = grp["name"].capitalize()
-                parts.append(f"[{g_icon} {g_name}]".strip() if g_icon else f"[{g_name}]")
+                seg["group"] = f"[{g_icon} {g_name}]".strip() if g_icon else f"[{g_name}]"
 
-        # 4. Permanent Job / Project Context with Icon
-        if always_show_job and (resolved_job or resolved_icon):
-            if resolved_icon and resolved_job:
-                parts.append(f"[{resolved_icon} {resolved_job}]")
-            elif resolved_job:
-                parts.append(f"[{resolved_job}]")
-            elif resolved_icon:
-                parts.append(f"[{resolved_icon}]")
+        # Agent identity (✳️ CLAUDE / 🪐 AGY / 👤 USER), model·effort and mode
+        is_agent = agent != agent_identity.USER
+        show_user_tag = self.config.get("show_user_identity", False)
+        if show_identity and (is_agent or show_user_tag or task_category == "idle"):
+            seg["identity"] = agent_identity.identity_tag(agent)
+        if is_agent:
+            seg["model"] = agent_identity.model_tag(sess.get("model"), sess.get("effort"))
+            if show_mode:
+                seg["mode"] = agent_identity.mode_tag(mode)
+            seg["activity"] = agent_identity.activity_tag(sess)
 
-        # 5. Task colored dot: distinct agent dot (🟠 Claude, 🔵 AGY) or category dot
+        # Task colored dot: distinct agent dot (🟠 Claude, 🔵 AGY) or category dot
         if show_task_dot and task_category != "idle":
-            if is_agent:
-                parts.append(agent_identity.agent_dot(agent))
-            else:
-                parts.append(self.get_task_dot(task_category))
+            seg["dot"] = agent_identity.agent_dot(agent) if is_agent else self.get_task_dot(task_category)
 
-        # 6. Status icon + detail
+        # Status icon + detail
         if clean_detail:
-            first_char = clean_detail[0] if clean_detail else ""
+            first_char = clean_detail[0]
             if any(clean_detail.startswith(ic) for ic in STATUS_ICONS.values()) or ord(first_char) > 1000:
-                parts.append(clean_detail)
+                seg["status"] = clean_detail
             else:
-                parts.append(f"{status_icon} {clean_detail}".strip())
+                seg["status"] = f"{status_icon} {clean_detail}".strip()
         else:
-            parts.append(status_icon)
+            seg["status"] = status_icon
+
+        if order is None:
+            order = self.config.get("title_order") or DEFAULT_TITLE_ORDER
+            if not isinstance(order, list):
+                order = DEFAULT_TITLE_ORDER
+            # Segments missing from a custom order still show, at the end, so nothing silently disappears.
+            order = list(order) + [k for k in DEFAULT_TITLE_ORDER if k not in order]
+        parts = [seg.get(k, "") for k in order]
 
         return " ".join(p for p in parts if p).strip()

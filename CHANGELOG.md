@@ -1,7 +1,50 @@
 # Changelog
 
-All notable changes to this project are documented here. The format follows
+Every change worth knowing about is listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+## [1.2.0] - 2026-10-09
+
+### Added
+- Tab fills painted by the menu library: two-tone, gradient, rainbow, stripes and solid. Titles are drawn in black or
+  white, whichever reads better on the fill. New `tab-style` command and a Tab Pattern menu.
+- Every project gets its own color, remembered across sessions (`colors`, `colors auto`, `colors set`,
+  `colors reset`). By default a tab is two-tone: the project's color, then the agent or state color.
+- The selected tab stands out. It's drawn at full strength, reaches down to its terminal and has an accent bar; the
+  other tabs are drawn softer.
+- Each terminal's background is tinted with its tab's colors, with a 3 px strip of the fill along the top
+  (`terminal_tint`, `terminal_band`). Panes of a split tab use the tab's colors, so attached or paired tabs match.
+- `colors position on|off` and a Colors Follow Tab Position menu item color tabs by position instead. Off by default.
+- A named agent session shows its name as the project: Claude Code `/rename` or `--name`, and agy `--project`. `list`
+  shows the same name.
+- Ultracode shows in the title, read from the transcript. Background work (workflows, background agents and shells,
+  teammates) shows too, and a turn that ends with work still running doesn't show as done.
+- One combined title on every pane of a split tab that holds several agents.
+- `title_order` setting.
+- `KONSOLE_AWARE_GRAB` saves a picture of each Konsole window, so screenshots can be taken with
+  `QT_QPA_PLATFORM=offscreen` and nothing showing on the desktop.
+
+### Changed
+- The project comes first in tab titles.
+- The Claude hook timeout is 10 s. Tool events from inside subagents return early when the tab was redrawn under a
+  second ago.
+- Right-click menu labels no longer have decorative icons. Color swatches, agent icons and the icon picker keep theirs.
+  Project & Job Context is now Project Name.
+- Plainer wording in CLI output, notifications, the README and the other docs.
+
+### Fixed
+- The installer replaced the menu library in place, which could crash or hang a running Konsole that had it loaded.
+  It now writes a new file and renames it.
+- Tab fills never showed. The library looked them up under a D-Bus name it had cached before Konsole registered its
+  own.
+- Dragging or moving a tab gave it a neighbor's colors. Tabs are now painted by their real index, and the library
+  notices when tabs change places.
+- Konsole could crash when a tab was moved, because the library asked Konsole for its sessions while the move was
+  half done. That lookup now waits until the move is finished.
+- The main turn's Stop no longer clears workflow subagents that are still running.
+- agy PreToolUse is no longer registered, since agy treats an empty reply as "deny".
 
 ## [1.1.0] - 2026-10-01
 
@@ -39,5 +82,7 @@ All notable changes to this project are documented here. The format follows
 - Initial release: tab titles, colors and badges for Konsole; agy and Claude Code hooks; tab grouping, anchoring,
   organizing, detaching and split views; context menu.
 
+[Unreleased]: https://github.com/sworrl/konsole-aware/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/sworrl/konsole-aware/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/sworrl/konsole-aware/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/sworrl/konsole-aware/releases/tag/v1.0.0

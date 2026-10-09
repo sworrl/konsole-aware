@@ -100,6 +100,8 @@ def _refresh_title(kterm: KonsoleTerminal) -> None:
 # --------------------------------------------------------------------------- hooks
 def cmd_agent(args: argparse.Namespace) -> int:
     """Handle AI agent hooks (agy, claude). Always exits 0 and never blocks the agent."""
+    prev_hook = os.environ.get("KONSOLE_AWARE_IS_HOOK")
+    os.environ["KONSOLE_AWARE_IS_HOOK"] = "1"
     agent_name = getattr(args, "agent", "agy").lower()
     try:
         payload: Dict[str, Any] = {}
@@ -133,6 +135,11 @@ def cmd_agent(args: argparse.Namespace) -> int:
                 sys.stdout.flush()
             except Exception:
                 pass
+    finally:
+        if prev_hook is None:
+            os.environ.pop("KONSOLE_AWARE_IS_HOOK", None)
+        else:
+            os.environ["KONSOLE_AWARE_IS_HOOK"] = prev_hook
     return 0
 
 
@@ -262,8 +269,8 @@ def _shell_precmd(args: argparse.Namespace) -> int:
             agent=agent_identity.USER,
         ), role=0)
         if sess.get("status") not in (None, "idle") or sess.get("agent"):
-            # Only undo colours/badges konsole-aware itself set; a colour picked with
-            # set-color or a group colour survives ordinary prompts.
+            # Only undo colors/badges konsole-aware itself set; a color picked with
+            # set-color or a group color survives ordinary prompts.
             state_mgr.set_session(session_id, status="idle")
             grp = TabGroupManager().get_tab_group(session_id)
             if grp and grp.get("color"):
@@ -415,7 +422,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     if not rows:
         print("No active Konsole sessions detected.")
         return 0
-    print("\n".join(_render_table(rows, "🔍 " + colorize("Konsole Aware - Tabs by Window (visual order)", bold=True))))
+    print("\n".join(_render_table(rows, colorize("Konsole Aware - Tabs by Window (visual order)", bold=True))))
     print()
     return 0
 
@@ -498,7 +505,7 @@ def cmd_snap(args: argparse.Namespace) -> int:
     for res in results:
         w_idx = res["window"].rsplit("/", 1)[-1]
         verb = "would become" if args.dry_run else ("snapped" if res["changed"] else "already snapped")
-        print(f"🧲 Window {w_idx}: {verb}")
+        print(f"Window {w_idx}: {verb}")
         prev_project = None
         for t in res["tabs"]:
             project = Path(t["project"]).name if t["project"] else "-"
@@ -614,7 +621,7 @@ def cmd_split(args: argparse.Namespace) -> int:
 
 
 def cmd_equalize(args: argparse.Namespace) -> int:
-    """Balance all split view sizes equally."""
+    """Make all split views the same size."""
     return _window_action(args, "equalize_splits", "✓ Balanced split views.", "Failed to balance split views.")
 
 
@@ -632,7 +639,7 @@ def cmd_group(args: argparse.Namespace) -> int:
 
     if action == "list":
         grps = grp_mgr.list_groups()
-        print("\n  🏷️  " + colorize("Konsole Aware - Tab Groups", bold=True))
+        print("\n  " + colorize("Konsole Aware - Tab Groups", bold=True))
         print("  " + "─" * 70)
         for g_name, g_info in grps.items():
             icon = g_info.get("icon", "📁")
@@ -704,7 +711,7 @@ def cmd_anchor(args: argparse.Namespace) -> int:
         organizer.move_session_to_index(found[0], str(num), (max(pinned) + 1) if pinned else 0)
     if kterm:
         _refresh_title(kterm)
-    print(f"📌 Tab {num} anchored (pinned to front).")
+    print(f"✓ Tab {num} anchored (pinned to the front).")
     return 0
 
 
@@ -767,7 +774,7 @@ def cmd_set_folder_icon(args: argparse.Namespace) -> int:
     """Set a custom folder icon in user configuration or list all mappings."""
     resolver = IconResolver()
     if args.list:
-        print("\n  📂 " + colorize("Konsole Aware - Folder and Project File Icons", bold=True))
+        print("\n  " + colorize("Konsole Aware - Folder and Project File Icons", bold=True))
         print("  " + "─" * 60)
         print(colorize("  Folder Name Mappings:", bold=True))
         folders = resolver.get_folder_icons()
@@ -865,14 +872,14 @@ def cmd_reset(args: argparse.Namespace) -> int:
 
 
 def cmd_alert(args: argparse.Namespace) -> int:
-    """Send test alert and notification."""
+    """Send a test alert and notification."""
     Notifier().notify(title=args.title, message=args.message, urgency="normal", is_error=args.error, play_sound=True)
     print("Alert sent.")
     return 0
 
 
 def refresh_all_tabs(service: Optional[str] = None, session_num: Optional[int] = None, quiet: bool = False) -> int:
-    """Live refresh of titles, colors, and badges for open Konsole tabs without tab restarts."""
+    """Redraw titles, colors and badges on open Konsole tabs, no restart needed."""
     from konsole_aware.agents.base import STATUS_STYLE
     from konsole_aware.terminal import dbus
 
@@ -883,6 +890,9 @@ def refresh_all_tabs(service: Optional[str] = None, session_num: Optional[int] =
     group_mgr = TabGroupManager()
 
     sessions = KonsoleTerminal.list_all_sessions(service=service)
+    if service is None and session_num is None and sessions:
+        from konsole_aware.tabs import styles
+        styles.prune({s["session_key"] for s in sessions})
     if session_num is not None:
         sessions = [s for s in sessions if s.get("session_num") == str(session_num)]
     if not sessions:
@@ -911,8 +921,13 @@ def refresh_all_tabs(service: Optional[str] = None, session_num: Optional[int] =
         state = state_mgr.get_session(s_key)
         fg_pid = s["foreground_pid"]
         shell_pid = s["shell_pid"]
-        agent, _ = agent_identity.resolve_session_agent(state, fg_pid, shell_pid)
+        agent, agent_pid = agent_identity.resolve_session_agent(state, fg_pid, shell_pid)
         cwd = state.get("cwd") or s.get("cwd")
+        if agent != agent_identity.USER and state.get("agent"):
+            # Pick up a session renamed since its last hook event.
+            name = agent_identity.session_name(agent, agent_pid)
+            if name != state.get("session_name"):
+                state = state_mgr.set_session(s_key, session_name=name)
 
         if agent == "claude" and not state.get("model"):
             # Backfill model/effort for sessions that started before they were tracked.
@@ -1022,6 +1037,108 @@ def refresh_all_tabs(service: Optional[str] = None, session_num: Optional[int] =
     return 0
 
 
+def _swatch(colors: List[str], pattern: str = "solid") -> str:
+    """A small terminal preview of a tab pattern."""
+    if not colors:
+        return ""
+    cells = 8
+    if pattern == "two-tone" and len(colors) >= 2:
+        picks = [colors[0]] * (cells // 2) + [colors[1]] * (cells - cells // 2)
+    elif len(colors) >= 2:
+        picks = [colors[min(len(colors) - 1, i * len(colors) // cells)] for i in range(cells)]
+    else:
+        picks = [colors[0]] * cells
+    return "".join(colorize("█", fg=c) for c in picks)
+
+
+def cmd_colors(args: argparse.Namespace) -> int:
+    """Project colors: list, set, reset, or auto-assign and group open projects."""
+    from konsole_aware.tabs import styles
+    action = args.colors_action or "list"
+
+    if action == "set":
+        if not args.project or not args.colors:
+            print("Usage: konsole-aware colors set <project> <color> [color ...] [--pattern P]", file=sys.stderr)
+            return 1
+        colors = [resolve_color_hex(c) for c in args.colors]
+        pattern = args.pattern or ("gradient" if len(colors) > 2 else "two-tone" if len(colors) == 2 else None)
+        entry = styles.set_project_colors(args.project, colors, pattern)
+        print(f"✓ {args.project}: {_swatch(entry.get('colors') or [entry['color']], pattern or 'solid')} {pattern or 'solid'}")
+        refresh_all_tabs(quiet=True)
+        return 0
+
+    if action == "position":
+        # Colors stay with each tab by default; "on" colors tabs by their position instead.
+        config = load_config()
+        current = bool(config.get("tab_colors_follow_position", False))
+        choice = (args.project or "toggle").lower()
+        enabled = (not current) if choice == "toggle" else choice in ("on", "true", "yes", "1")
+        config["tab_colors_follow_position"] = enabled
+        try:
+            save_config(config)
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        refresh_all_tabs(quiet=True)
+        print("✓ Tab colors now follow tab position (dragging a tab recolors it)." if enabled
+              else "✓ Tab colors now stay with their tabs when you drag them.")
+        return 0
+
+    if action == "reset":
+        styles.forget_project(args.project or "")
+        print(f"✓ {args.project} goes back to an automatic color.")
+        refresh_all_tabs(quiet=True)
+        return 0
+
+    if action == "auto":
+        # Give every open project a color, repaint, and put each project's tabs together.
+        resolver = IconResolver()
+        projects = set()
+        for s in KonsoleTerminal.list_all_sessions():
+            if s.get("cwd"):
+                root = resolver.find_project_root(s["cwd"])
+                if root not in (Path.home(), Path("/")):
+                    projects.add(root.name)
+        for name in sorted(projects):
+            styles.project_entry(name)
+        refresh_all_tabs(quiet=True)
+        if not args.no_snap:
+            TabOrganizer().snap_all()
+        print(f"✓ Colored {len(projects)} projects" + ("" if args.no_snap else " and grouped their tabs together") + ".")
+        action = "list"
+
+    data = styles.project_colors()
+    if not data:
+        print("No project colors yet. They are assigned as projects show up in tabs, or run: konsole-aware colors auto")
+        return 0
+    width = max(len(k) for k in data)
+    for name in sorted(data):
+        entry = data[name] if isinstance(data[name], dict) else {"color": data[name]}
+        cols = entry.get("colors") or [entry.get("color")]
+        print(f"  {name:<{width}}  {_swatch(cols, entry.get('pattern') or 'solid')}  {' '.join(cols)}"
+              + (f"  ({entry['pattern']})" if entry.get("pattern") else ""))
+    return 0
+
+
+def cmd_tab_style(args: argparse.Namespace) -> int:
+    """Pattern for one tab (overrides the project pattern)."""
+    kterm, svc, num = _require_tab(args)
+    if num is None or kterm is None:
+        return 1
+    state = StateManager()
+    key = kterm.get_session_id()
+    if args.clear or not args.pattern:
+        state.set_session(key, tab_style=None)
+        print(f"✓ Tab {num} uses its project pattern again.")
+    else:
+        colors = [resolve_color_hex(c) for c in args.colors]
+        state.set_session(key, tab_style={"pattern": args.pattern, "colors": colors})
+        print(f"✓ Tab {num}: {args.pattern} {_swatch(colors, args.pattern) if colors else ''}")
+    status_color = (state.get_session(key).get("ui") or {}).get("color") or kterm.get_tab_color() or None
+    kterm.publish_tab_style(status_color)
+    return 0
+
+
 def cmd_refresh(args: argparse.Namespace) -> int:
     """Refresh tab titles, colors, and badges across all open Konsole tabs."""
     tab = getattr(args, "tab", None)
@@ -1030,19 +1147,19 @@ def cmd_refresh(args: argparse.Namespace) -> int:
 
 
 def cmd_install(args: argparse.Namespace) -> int:
-    """Install konsole-aware into user environment, shells, agy, and claude."""
+    """Install konsole-aware for this user: shells, agy and claude hooks."""
     repo_root = Path(__file__).resolve().parent.parent
     status = installer.install(repo_root, build_menu=not args.no_menu)
     refresh_all_tabs(quiet=True)
-    print("\n🎉 Installation completed." if status == 0 else "\n⚠ Installation completed with errors (see above).")
-    print("👉 Reload your shell: 'source ~/.zshrc' (or open a new Konsole tab)")
+    print("\nInstall finished." if status == 0 else "\n⚠ Install finished with errors (see above).")
+    print("Reload your shell with 'source ~/.zshrc', or open a new Konsole tab.")
     return status
 
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
-    """Cleanly uninstall konsole-aware hooks and integrations."""
+    """Remove konsole-aware hooks and shell integration."""
     installer.uninstall()
-    print("\n✓ Uninstallation complete.")
+    print("\n✓ Uninstall finished.")
     return 0
 
 
@@ -1055,8 +1172,8 @@ def _add_target(p: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="konsole-aware",
-        description="Terminal & tab awareness for Konsole: AI agents (claude, agy, ...), tasks, "
-                    "project snapping, grouping, anchoring and organization.",
+        description="Shows what each Konsole tab is doing: AI agents (claude, agy, ...), tasks, "
+                    "projects, plus snapping, grouping, pinning and sorting tabs.",
     )
     subparsers = parser.add_subparsers(dest="subcommand")
 
@@ -1200,7 +1317,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_target(p_refresh)
     p_refresh.set_defaults(func=cmd_refresh)
 
-    p_alert = subparsers.add_parser("alert", help="Send test alert notification & sound")
+    p_alert = subparsers.add_parser("alert", help="Send a test notification and sound")
     p_alert.add_argument("title", help="Alert title")
     p_alert.add_argument("message", help="Alert body")
     p_alert.add_argument("--error", action="store_true", help="Mark as error alert")
@@ -1218,6 +1335,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_wd.add_argument("--key", required=True)
     p_wd.add_argument("--agent", required=True)
     p_wd.set_defaults(func=cmd_watchdog)
+
+    p_colors = subparsers.add_parser("colors", help="Project colors: list, set, reset, auto (color and group open projects), position [on|off]")
+    p_colors.add_argument("colors_action", nargs="?", choices=["list", "set", "reset", "auto", "position"], default="list")
+    p_colors.add_argument("project", nargs="?", default="", help="Project name (folder name of its root)")
+    p_colors.add_argument("colors", nargs="*", default=[], help="One or more colors (names or hex)")
+    p_colors.add_argument("--pattern", choices=["solid", "two-tone", "gradient", "rainbow", "stripes"],
+                          help="Pattern for this project's tabs")
+    p_colors.add_argument("--no-snap", action="store_true", help="With auto: do not move tabs")
+    _add_target(p_colors)
+    p_colors.set_defaults(func=cmd_colors)
+
+    p_tstyle = subparsers.add_parser("tab-style", help="Pattern for one tab: solid, two-tone, gradient, rainbow, stripes")
+    p_tstyle.add_argument("pattern", nargs="?", choices=["solid", "two-tone", "gradient", "rainbow", "stripes"])
+    p_tstyle.add_argument("colors", nargs="*", default=[], help="Colors (names or hex); rainbow needs none")
+    p_tstyle.add_argument("--clear", action="store_true", help="Go back to the project pattern")
+    _add_target(p_tstyle)
+    p_tstyle.set_defaults(func=cmd_tab_style)
 
     p_install = subparsers.add_parser("install", help="Install hooks and shell integration")
     p_install.add_argument("--no-menu", action="store_true", help="Skip building the tab context-menu hook")

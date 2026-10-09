@@ -2,8 +2,8 @@
 
 Konsole's D-Bus API can only move the *active* tab one step at a time
 (Window.moveSessionLeft/Right). So every reorder selects a tab, nudges it, then
-restores the tab the user had focused, and re-applies tab colours (Konsole re-inserts
-the moved tabs, which drops their colour from the tab bar).
+restores the tab the user had focused, and re-applies tab colors (Konsole re-inserts
+the moved tabs, which drops their color from the tab bar).
 """
 
 import re
@@ -173,8 +173,8 @@ class TabOrganizer:
         return colors
 
     def _reapply_colors(self, colors: Dict[str, str]) -> None:
-        """Konsole only repaints a tab colour when it changes, so bounce through a
-        near-identical colour to force the moved tabs to get theirs back."""
+        """Konsole only repaints a tab color when it changes, so bounce through a
+        near-identical color to force the moved tabs to get theirs back."""
         for pane, color in colors.items():
             if not color or color.lower() in ("#000000", "#ff000000"):
                 continue
@@ -202,7 +202,7 @@ class TabOrganizer:
         return True
 
     def move_session_to_index(self, window_path: str, session_num: str, target_idx: int) -> bool:
-        """Move a tab to a visual tab index, keeping the user's focused tab and tab colours."""
+        """Move a tab to a visual tab index, keeping the user's focused tab and tab colors."""
         if not self.qdbus_bin or not self.service:
             return False
         current = self._win(window_path, "currentSession")

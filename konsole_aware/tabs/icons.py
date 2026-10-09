@@ -1,4 +1,4 @@
-"""Icon resolution and management for project folders, directories, and tabs."""
+"""Picks the icon for a project, folder or tab."""
 
 import json
 import os
