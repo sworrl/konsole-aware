@@ -8,7 +8,7 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  gcc-c++, make, qt6-qtbase-devel, pkgconf-pkg-config
 Requires:       python3 >= 3.8, konsole, qt6-qtbase-gui
-Recommends:     python3-gobject, libnotify, pulseaudio-utils
+Recommends:     python3-gobject, libnotify, pulseaudio-utils, gdb
 
 %global debug_package %{nil}
 %global __brp_mangle_shebangs %{nil}
@@ -40,6 +40,9 @@ echo "konsole-aware installed. Each user enables it with: konsole-aware install"
 /usr/share/doc/konsole-aware
 
 %changelog
+* Sat Oct 10 2026 sworrl <github@falcontechnix.com> - 1.4.0-1
+- See CHANGELOG.md
+
 * Fri Oct 09 2026 sworrl <github@falcontechnix.com> - 1.3.0-1
 - See CHANGELOG.md
 

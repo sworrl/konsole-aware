@@ -132,7 +132,8 @@ The clone is the install (the installer links to it), so keep it somewhere it ca
 | `~/.gemini/config/hooks.json` | Adds a `konsole-aware` hook group for agy. Other groups stay |
 | `~/.zshrc`, `~/.bashrc` | Adds one line each, tagged `# konsole-aware`, that loads the shell integration |
 | `~/.local/bin/konsole-aware` | Link to the program (source and one-line installs only) |
-| `~/.local/lib/libkonsole_aware_menu.so`, `~/.local/bin/konsole`, `~/.local/share/applications/org.kde.konsole.desktop` | The right-click menu library, a launcher that loads it, and a desktop entry that uses the launcher |
+| `~/.local/lib/libkonsole_aware_menu.so`, `~/.local/lib/konsole-aware/libkonsole_aware_module.so` | The loader Konsole preloads, and the module it loads with the right-click menu, tab fills and tray icon. Package installs use the package's module instead of a copy |
+| `~/.local/bin/konsole`, `~/.local/share/applications/org.kde.konsole.desktop` | A launcher that preloads the loader, and a desktop entry that uses the launcher |
 
 Running it again replaces only its own entries.
 
@@ -143,7 +144,8 @@ Expected output:
 ✓ Configured Antigravity lifecycle hooks: /home/you/.gemini/config/hooks.json
 ✓ Configured Claude Code hooks (18 events): /home/you/.claude/settings.json
 ✓ Added shell integration to /home/you/.zshrc
-✓ Installed context menu hook library: /home/you/.local/lib/libkonsole_aware_menu.so
+✓ Installed context menu loader: /home/you/.local/lib/libkonsole_aware_menu.so
+✓ Installed context menu module: /home/you/.local/lib/konsole-aware/libkonsole_aware_module.so (open Konsole windows switch to it now)
 ✓ Installed konsole wrapper with menu hook: /home/you/.local/bin/konsole
 ✓ Installed desktop application entry: /home/you/.local/share/applications/org.kde.konsole.desktop
 
@@ -153,8 +155,9 @@ Reload your shell with 'source ~/.zshrc', or open a new Konsole tab.
 
 Then:
 
-1. Quit every Konsole window and start Konsole again from the app launcher. The right-click menu only loads when
-   Konsole starts from the launcher. A Konsole that Plasma restores at login starts without it.
+1. Run `konsole-aware hotload` to bring the Konsole windows you already have open on board without closing them
+   (it asks for your password once; see [Updating](#updating)), or quit Konsole and start it again from the app
+   launcher. New Konsole windows from the launcher have it from the start.
 2. Open a new tab, or run `source ~/.zshrc` in the ones you have open.
 3. Start `claude` or `agy` in a project. The tab should change to `CLAUDE …` or `AGY …` at the first prompt.
 4. Run `konsole-aware list` to see every tab.
@@ -371,6 +374,7 @@ picker. Set `"tab_pattern": "none"` to turn the fills off and keep Konsole's lin
 | `konsole-aware update` | Shows the installed and latest versions |
 | `konsole-aware update check` | Looks on GitHub for a new release now |
 | `konsole-aware update install` | Installs the latest release the same way you installed this one |
+| `konsole-aware hotload [--check] [--pid N]` | Makes Konsole windows that are already open update in place, without closing them |
 | `konsole-aware update skip [version]`, `update later [hours]` | Stops the reminder for that release, or hides it for a while (24 hours by default) |
 | `konsole-aware daemon` | Optional background poller for shells that don't load the integration |
 
@@ -462,10 +466,12 @@ Every key and its default is in `DEFAULT_CONFIG` in [`konsole_aware/config.py`](
 | `KONSOLE_AWARE_STATE_DIR` | Where tab state is kept | `$XDG_RUNTIME_DIR/konsole-aware` |
 | `KONSOLE_AWARE_QDBUS` | Which `qdbus` to use when PyGObject isn't installed | first of `qdbus6`, `qdbus-qt6`, `qdbus`, `qdbus-qt5` |
 | `KONSOLE_AWARE_KEEP_ELIDE` | Set it to keep Konsole cutting titles at the start | unset |
+| `KONSOLE_AWARE_MODULE` | Which module the loader loads. The launcher sets it for package installs | `~/.local/lib/konsole-aware/libkonsole_aware_module.so`, then `/usr/lib/konsole-aware/menu_hook/libkonsole_aware_module.so` |
+| `KONSOLE_AWARE_NO_MODULE` | Set it to have the loader load nothing | unset |
 | `KONSOLE_AWARE_NO_UPDATES` | Set it to stop the menu library from running the update check and showing the tray icon | unset |
 | `KONSOLE_AWARE_NO_PATTERNS` | Set it to turn off the tab fills and terminal tint in the menu library | unset |
 | `KONSOLE_AWARE_DEBUG` | Set it to log the menu library's tab and pattern lookups to the journal | unset |
-| `KONSOLE_AWARE_GRAB` | A `.png` path. Creating `<path>.request` saves each Konsole window there. If the request file reads `menu <tab> [<submenu>]`, it opens that tab's right-click menu (and submenu) first and the picture includes it. Used for the README screenshots | unset |
+| `KONSOLE_AWARE_GRAB` | A `.png` path. Creating `<path>.grab` saves each Konsole window there. If the request file reads `menu <tab> [<submenu>]`, it opens that tab's right-click menu (and submenu) first and the picture includes it. Used for the README screenshots | unset |
 | `KONSOLE_AWARE_HOME`, `KONSOLE_AWARE_REPO` | Where `get.sh` clones to, and from | `~/.local/share/konsole-aware`, this repo |
 | `KONSOLE_AWARE_NO_DBUS`, `KONSOLE_AWARE_TERMINAL=null`, `KONSOLE_AWARE_SESSION_KEY` | Used by the tests: no D-Bus, a terminal that writes nothing, a fixed tab key | unset |
 | `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR` | Base folders for config and state | `~/.config`, `/run/user/<uid>` |
@@ -513,8 +519,11 @@ konsole-aware/
 │   ├── daemon/watcher.py          # scanning for list, watch and daemon
 │   ├── notify/notifier.py         # notify-send, sounds, rate limit
 │   ├── update.py                  # new release check on GitHub, update install
+│   ├── hotload.py                 # puts the loader into Konsole windows that are already open
 │   └── state/manager.py           # the locked state file
-├── menu_hook/                     # right-click menu, tab fills, terminal tint, update tray icon (C++17, Qt 6)
+├── menu_hook/
+│   ├── konsole_aware_loader.cpp   # what Konsole preloads: loads the module, reloads it on update
+│   └── konsole_aware_module.cpp   # right-click menu, tab fills, terminal tint, update tray icon (C++17, Qt 6)
 ├── shell/                         # zsh and bash integration
 ├── packaging/                     # .deb and .rpm build scripts
 ├── systemd/konsole-aware.service  # optional daemon unit
@@ -575,13 +584,31 @@ has no exit hook. While an agent is busy, one watcher per tab checks every 3 sec
 a `turn_duration` record, a usage-limit message, or the agent process being gone, and ends the turn. It exits as soon
 as the turn is over, and only rereads the transcript when the file has changed.
 
-**The right-click menu** (`menu_hook/`). The library hooks `QMenu::exec`, spots Konsole's tab menu by its
-`tab-detach` and `edit-rename` actions, and adds its own items. It maps the clicked tab to a session through the
-window's `ViewManager::sessionList` and runs the CLI with `--tab` and `--service`. When it loads it removes itself from
-`LD_PRELOAD`, so the programs you run in your tabs don't load it.
+**Loader and module** (`menu_hook/`). Konsole preloads a small loader, `libkonsole_aware_menu.so`, that never
+changes between releases. Everything else is in `libkonsole_aware_module.so`. The loader loads the module and watches
+its file. When an update replaces the file, the loader loads the new copy, the old copy takes down everything it set
+up (event filters, timers, tab bar styles, strips, menu items, the tray icon), and the new copy sets itself up on the
+windows that are already open. Each load goes through a copy with a new name in `$XDG_RUNTIME_DIR/konsole-aware/modules`,
+removed right after loading, because dlopen hands back the library it already has when the name matches. Old copies
+stay mapped and are never unloaded, so nothing still pointing into one can crash Konsole. When the module file is
+removed (uninstall), the loader takes konsole-aware out of the open windows too. When the loader loads it removes
+itself from `LD_PRELOAD`, so the programs you run in your tabs don't load it.
+
+`konsole-aware hotload` handles Konsole windows that were started without the loader (before 1.4, or restored by
+Plasma at login). It attaches gdb to each of those Konsole processes and has it `dlopen` a copy of the loader, which
+then starts the module from Konsole's event loop once gdb lets go. Attaching to a running program needs root when
+`/proc/sys/kernel/yama/ptrace_scope` is 1 (the default on Ubuntu and Fedora), so it asks for your password once,
+through sudo in a terminal or pkexec otherwise. Konsole pauses for a moment while gdb is attached. The 1.2 library
+in such a Konsole stays loaded but has nothing left to do: its menu items are replaced as the menu opens, and the
+tab fills moved to a file it doesn't read.
+
+**The right-click menu**. The module notes which tab a right-click landed on as the event arrives, then adds its items
+when Konsole's tab menu emits `aboutToShow`. It spots the menu by its `tab-detach` and `edit-rename` actions, maps the
+clicked tab to a session through the window's `ViewManager::sessionList`, and runs the CLI with `--tab` and
+`--service`.
 
 **Tab fills and terminal tint** (`tabs/styles.py`, `menu_hook/`). konsole-aware writes one fill spec per tab to
-`$XDG_RUNTIME_DIR/konsole-aware/styles/tab-styles.json`. The menu library watches that folder, and a Qt style on each
+`$XDG_RUNTIME_DIR/konsole-aware/styles/tab-styles-2.json`. The menu library watches that folder, and a Qt style on each
 tab bar paints the tab from it. Each terminal gets a paint filter that blends the tab's pattern into the background
 after Konsole draws it, plus a 3 px strip widget along the top. Tabs, tints and strips all go through one fill
 function, so they always match. Konsole scrolls by copying pixels up a line and painting only the new line, which is
@@ -618,7 +645,7 @@ org.kde.konsole-5659:/Sessions/13
 └── ui               the title, color and badge last sent to Konsole
 ```
 
-The same folder has `styles/tab-styles.json` (the tab fills), `sessions.lock`, `notify-times.json` (the notification limit), one `watch-*.lock` per running
+The same folder has `styles/tab-styles-2.json` (the tab fills), `modules/` (briefly, while a module or loader is being loaded), `sessions.lock`, `notify-times.json` (the notification limit), one `watch-*.lock` per running
 watcher, and `errors.log`.
 
 ## Testing
@@ -629,7 +656,7 @@ python3 -m pytest -q
 
 ```text
 .........................................................................................
-117 passed in 1.1s
+123 passed in 1.3s
 ```
 
 The tests don't need Konsole and don't touch your setup. `tests/conftest.py` points config and state at a temp
@@ -704,7 +731,8 @@ tray icon shows up until you update or dismiss it. Its menu has:
 | `.rpm` | Downloads the new `.rpm` and runs `sudo dnf install` (or `zypper`, or `rpm -U`) |
 | One line or source | `git pull --ff-only` in the checkout |
 
-Then it runs `konsole-aware install` for your user and `konsole-aware refresh`. To update by hand instead:
+Then it runs `konsole-aware install` for your user and `konsole-aware refresh`, and `konsole-aware hotload` if any
+open Konsole is still on a library from before 1.4. To update by hand instead:
 
 | Installed with | Update with |
 | :--- | :--- |
@@ -715,8 +743,23 @@ Then it runs `konsole-aware install` for your user and `konsole-aware refresh`. 
 The check sends one request to `api.github.com` with a `konsole-aware/<version>` user agent and nothing else. Set
 `"update_check": false` to turn it off; `konsole-aware update check` still works by hand.
 
-`konsole-aware refresh` redraws your open tabs. Running agents pick up the new code on their next event. The
-right-click menu, tab fills and terminal tint need a Konsole restart.
+### Updates without restarting Konsole
+
+You never have to close Konsole for an update. Running agents pick up the new code on their next event, and
+`konsole-aware refresh` redraws your open tabs. The right-click menu, tab fills, terminal tint and tray icon come from
+a module that open Konsole windows reload by themselves when an update replaces it, within about a second. Package
+upgrades (apt, dnf, Discover) count too, since package installs use the package's own copy of the module.
+
+That needs the loader, which a Konsole gets when it starts from the launcher. A Konsole that was already open before
+1.4, or that Plasma restored at login, doesn't have it yet. Bring those over once, without closing them:
+
+```bash
+konsole-aware hotload --check   # which Konsole processes update in place
+konsole-aware hotload           # load the loader into the rest; asks for your password once
+```
+
+`hotload` needs gdb (`apt install gdb` or `dnf install gdb`). See [Pieces worth knowing about](#pieces-worth-knowing-about)
+for how it works.
 
 The optional daemon covers shells that don't load the integration, like a shell started with `--norc`. You don't need
 it for agents or for normal shells:
@@ -741,11 +784,11 @@ D-Bus can't reach Konsole.
 
 ### The right-click menu doesn't have the konsole-aware items
 
-That Konsole was started without the library, usually by Plasma restoring your session at login. Quit every Konsole
-window and start Konsole from the launcher. To check:
+That Konsole was started without the loader, usually by Plasma restoring your session at login. Run
+`konsole-aware hotload` to load it into that Konsole without closing it, or start Konsole from the launcher. To check:
 
 ```bash
-grep -c konsole_aware_menu /proc/$(pgrep -nx konsole)/maps   # 0 means it isn't loaded
+konsole-aware hotload --check
 ```
 
 ### A tab stays on thinking or tool after the agent stopped

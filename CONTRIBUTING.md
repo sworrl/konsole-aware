@@ -8,7 +8,7 @@ Bug reports, new agents, other terminals and fixes are all welcome.
 git clone https://github.com/sworrl/konsole-aware.git
 cd konsole-aware
 python3 -m pytest -q        # the tests don't need Konsole and don't touch your setup
-make -C menu_hook           # optional: builds the right-click menu library (needs the Qt 6 headers)
+make -C menu_hook           # optional: builds the loader and module (needs the Qt 6 headers)
 ```
 
 The Python side only uses the standard library, plus GLib's `gi` when it's installed. Run it straight from the clone
@@ -25,6 +25,9 @@ with `bin/konsole-aware`.
   out.
 - Anything in `menu_hook/` that reaches into Konsole's internals is looked up when Konsole starts, and the feature
   that needs it is turned off if it isn't there. It must never crash Konsole.
+- Everything the module sets up has to come down in `ka_module_stop()`, because updates swap the module inside running
+  Konsole windows. Parent new objects to `root()`, use `root()` as the context of every connection and timer, and
+  undo any change to Konsole's own widgets there.
 - Don't open windows on the desktop to test the menu library. Run Konsole with `QT_QPA_PLATFORM=offscreen` and use
   `KONSOLE_AWARE_GRAB` to save a picture of it (see the README's environment variables).
 - Match the code around your change, and add a test for every change in behavior.

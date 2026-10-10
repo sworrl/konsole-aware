@@ -269,5 +269,10 @@ def install(out=print) -> int:
     _run([binary, "install"])
     subprocess.call([binary, "refresh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.call([binary, "update", "check", "--auto"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    out(f"konsole-aware {state['latest']} is installed. Restart Konsole to load the new menu library.")
+    # Konsole windows with the loader switch to the new module by themselves. Ones
+    # started before 1.4 get the loader now; this terminal can ask for the password.
+    from konsole_aware import hotload
+    if hotload.pending():
+        hotload.hotload(out=out)
+    out(f"konsole-aware {state['latest']} is installed. Open Konsole windows switch to it on their own.")
     return 0

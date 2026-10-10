@@ -17,7 +17,7 @@ Architecture: $ARCH
 Maintainer: sworrl <github@falcontechnix.com>
 Installed-Size: $SIZE
 Depends: python3 (>= 3.8), konsole, libqt6widgets6 | libqt6widgets6t64, libqt6dbus6 | libqt6dbus6t64
-Recommends: python3-gi, libnotify-bin, pulseaudio-utils | pipewire-bin
+Recommends: python3-gi, libnotify-bin, pulseaudio-utils | pipewire-bin, gdb
 Section: utils
 Priority: optional
 Homepage: https://github.com/sworrl/konsole-aware

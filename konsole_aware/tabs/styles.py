@@ -2,7 +2,7 @@
 
 Konsole itself only draws a tab's color as a thin line under the title. The context
 menu library (menu_hook/) paints the whole tab background from a spec published here,
-in $XDG_RUNTIME_DIR/konsole-aware/styles/tab-styles.json:
+in $XDG_RUNTIME_DIR/konsole-aware/styles/tab-styles-2.json:
 
     {"_settings": {"follow_position": false, "palette": [...]},
      "org.kde.konsole-5659:/Sessions/13": {"pattern": "two-tone",
@@ -39,8 +39,11 @@ from konsole_aware.config import config_home, load_config
 from konsole_aware.state.manager import STATE_DIR
 
 # Own folder: the Konsole library watches it, and the state folder next to it changes
-# on almost every hook event.
-STYLES_FILE = STATE_DIR / "styles" / "tab-styles.json"
+# on almost every hook event. 1.2 libraries read tab-styles.json, which is no longer
+# written; `hotload` removes it once the 1.4 module runs in every Konsole, so a 1.2
+# library still loaded next to it stops painting over the new one.
+STYLES_FILE = STATE_DIR / "styles" / "tab-styles-2.json"
+LEGACY_STYLES_FILE = STATE_DIR / "styles" / "tab-styles.json"
 PROJECT_COLORS_FILE = config_home() / "konsole-aware" / "project-colors.json"
 
 PATTERNS = ("none", "solid", "two-tone", "gradient", "rainbow", "stripes", "flag")

@@ -1186,6 +1186,20 @@ def cmd_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hotload(args: argparse.Namespace) -> int:
+    """Load the update-in-place loader into Konsole windows opened before 1.4."""
+    from konsole_aware import hotload
+    if args.check:
+        pids = hotload.konsole_pids()
+        if not pids:
+            print("No Konsole is running.")
+        for pid in pids:
+            print(f"  Konsole {pid}: " + ("updates in place" if hotload.has_loader(pid)
+                                          else "needs `konsole-aware hotload` (or a restart)"))
+        return 0
+    return hotload.hotload([args.pid] if args.pid else None)
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     """Install konsole-aware for this user: shells, agy and claude hooks."""
     repo_root = Path(__file__).resolve().parent.parent
@@ -1193,6 +1207,12 @@ def cmd_install(args: argparse.Namespace) -> int:
     refresh_all_tabs(quiet=True)
     print("\nInstall finished." if status == 0 else "\n⚠ Install finished with errors (see above).")
     print("Reload your shell with 'source ~/.zshrc', or open a new Konsole tab.")
+    if not args.no_menu:
+        from konsole_aware import hotload
+        older = hotload.pending()
+        if older:
+            print(f"{len(older)} open Konsole process{'es were' if len(older) > 1 else ' was'} started before 1.4 and "
+                  "keeps its old menu and colors. To switch it over without closing it, run: konsole-aware hotload")
     return status
 
 
@@ -1402,6 +1422,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_update.add_argument("value", nargs="?", help="Version for skip, hours for later")
     p_update.add_argument("--auto", action="store_true", help=argparse.SUPPRESS)
     p_update.set_defaults(func=cmd_update)
+
+    p_hotload = subparsers.add_parser("hotload", help="Make Konsole windows opened before 1.4 update in place, without closing them")
+    p_hotload.add_argument("--check", action="store_true", help="Only show which Konsole processes update in place")
+    p_hotload.add_argument("--pid", type=int, help="One Konsole process instead of all of them")
+    p_hotload.set_defaults(func=cmd_hotload)
 
     p_uninstall = subparsers.add_parser("uninstall", help="Uninstall hooks and shell integration")
     p_uninstall.set_defaults(func=cmd_uninstall)

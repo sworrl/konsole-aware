@@ -1,17 +1,25 @@
-// konsole-aware: LD_PRELOAD hook that extends Konsole's tab-bar context menu.
+// konsole-aware module: everything konsole-aware adds inside Konsole. The tab
+// right-click menu, tab fills, terminal tint, the update tray icon and the README
+// screenshot hook all live here.
 //
-// It interposes QMenu::exec(const QPoint&, QAction*). When the menu being shown
-// is the tab context menu of a Konsole::TabbedViewContainer, extra actions are
-// appended. Most actions shell out to the `konsole-aware` CLI with an explicit
-// `--tab <sessionId> --service <konsole D-Bus service>` so they target the tab
-// that was right-clicked (which Konsole does NOT make current) in this Konsole
-// process (the CLI is launched from Konsole's main process, which has no
-// KONSOLE_DBUS_SESSION in its environment).
+// The loader (konsole_aware_loader.cpp, preloaded into Konsole) loads this library and
+// calls ka_module_start(). When an update replaces the file, the loader loads the new
+// copy, calls ka_module_stop() on this one and ka_module_start() on the new one, so
+// updates reach open Konsole windows without a restart. Everything this module creates
+// is owned by one root object, or tracked, so ka_module_stop() can take it all down:
+// timers, watchers, event filters, tab bar styles, strips, menu items, the tray icon.
+//
+// The tab right-click menu: Konsole creates it as `new QMenu(tabBar())` and calls
+// exec(tabBar()->mapToGlobal(point)) from its customContextMenuRequested handler. This
+// module notes which tab the right-click landed on (from the ContextMenu event, before
+// Konsole sees it) and adds its items when the menu emits aboutToShow. Most items shell
+// out to the `konsole-aware` CLI with an explicit `--tab <sessionId> --service <konsole
+// D-Bus service>` so they target the tab that was right-clicked (which Konsole does NOT
+// make current) in this Konsole process.
 //
 // Konsole internals relied upon (verified against Konsole 26.08 sources):
-//  - TabbedViewContainer creates the menu as `new QMenu(tabBar())` and calls
-//    exec(tabBar()->mapToGlobal(point)); so menu->parentWidget() is the
-//    DetachableTabBar and its parentWidget() is the TabbedViewContainer.
+//  - The menu's parentWidget() is the DetachableTabBar and its parentWidget() is the
+//    TabbedViewContainer.
 //  - Built-in actions carry objectNames "tab-detach", "edit-rename", "tab-close".
 //  - TabbedViewContainer::detachTab(int) is a Qt signal (invokable by name).
 //  - TabbedViewContainer::moveTabToWindow(int, QWidget*) is a plain exported
@@ -82,72 +90,34 @@
 
 namespace {
 
-constexpr const char kLibBasename[] = "libkonsole_aware_menu.so";
 constexpr const char kInjectedProp[] = "konsole_aware_injected";
 
-bool s_isKonsoleProcess = false;
+// Owns everything this module sets up; deleted by ka_module_stop().
+QObject *s_root = nullptr;
 
-// ---------------------------------------------------------------------------
-// Process setup: keep LD_PRELOAD from leaking into every shell/tool spawned by
-// Konsole, and only activate the hook inside Konsole itself.
-// ---------------------------------------------------------------------------
-
-void stripSelfFromLdPreload()
+QObject *root()
 {
-    const char *cur = getenv("LD_PRELOAD");
-    if (!cur) {
-        return;
-    }
-    const std::string in(cur);
-    std::string out;
-    bool removed = false;
-
-    // ld.so accepts both ':' and whitespace as separators.
-    size_t pos = 0;
-    while (pos <= in.size()) {
-        size_t end = in.find_first_of(": \t", pos);
-        if (end == std::string::npos) {
-            end = in.size();
-        }
-        const std::string tok = in.substr(pos, end - pos);
-        if (!tok.empty()) {
-            const size_t slash = tok.rfind('/');
-            const std::string base = (slash == std::string::npos) ? tok : tok.substr(slash + 1);
-            if (base == kLibBasename) {
-                removed = true;
-            } else {
-                if (!out.empty()) {
-                    out += ':';
-                }
-                out += tok;
-            }
-        }
-        pos = end + 1;
-    }
-
-    if (!removed) {
-        return;
-    }
-    if (out.empty()) {
-        unsetenv("LD_PRELOAD");
-    } else {
-        setenv("LD_PRELOAD", out.c_str(), 1);
-    }
+    return s_root;
 }
 
-__attribute__((constructor)) void konsoleAwareMenuInit()
+// Widgets this module has set up carry a property naming the root that owns them, so a
+// newly loaded copy takes them over and an old copy's marks don't count.
+constexpr const char kStyleOwner[] = "konsole_aware_style_owner";
+constexpr const char kTintOwner[] = "konsole_aware_tint_owner";
+constexpr const char kMenuOwner[] = "konsole_aware_menu_owner";
+
+bool ownedHere(const QObject *o, const char *prop)
 {
-    // Always strip ourselves (even in a non-Konsole process that somehow
-    // inherited us) so that descendants do not load Qt6Widgets needlessly.
-    stripSelfFromLdPreload();
-    s_isKonsoleProcess = program_invocation_short_name && strcmp(program_invocation_short_name, "konsole") == 0;
+    return o->property(prop).toULongLong() == reinterpret_cast<quintptr>(s_root);
+}
+
+void markOwned(QObject *o, const char *prop)
+{
+    o->setProperty(prop, QVariant::fromValue<qulonglong>(reinterpret_cast<quintptr>(s_root)));
 }
 
 bool isKonsoleProcess()
 {
-    if (s_isKonsoleProcess) {
-        return true;
-    }
     return QCoreApplication::instance() && QCoreApplication::applicationName() == QLatin1String("konsole");
 }
 
@@ -160,9 +130,22 @@ bool isKonsoleProcess()
 // to ElideRight as it is polished, so the identity always stays readable.
 void installTabPatterns(QTabBar *bar);
 void attachTerminalTint(QWidget *display);
+void hookTabMenus(QTabBar *bar);
 void startPatternWatcher();
 void startGrabWatcher();
 void startUpdateWatcher();
+
+// The tab each tab bar's right-click menu is about to open for.
+QHash<const QTabBar *, int> s_menuTab;
+
+void adoptTabBar(QTabBar *bar)
+{
+    if (bar->elideMode() != Qt::ElideRight && qEnvironmentVariableIsEmpty("KONSOLE_AWARE_KEEP_ELIDE")) {
+        bar->setElideMode(Qt::ElideRight);
+    }
+    installTabPatterns(bar);
+    hookTabMenus(bar);
+}
 
 class ElideRightFilter : public QObject
 {
@@ -174,34 +157,19 @@ protected:
     {
         if (ev->type() == QEvent::Polish || ev->type() == QEvent::Show) {
             if (obj->inherits("Konsole::DetachableTabBar")) {
-                auto *bar = static_cast<QTabBar *>(obj);
-                if (bar->elideMode() != Qt::ElideRight && qEnvironmentVariableIsEmpty("KONSOLE_AWARE_KEEP_ELIDE")) {
-                    bar->setElideMode(Qt::ElideRight);
-                }
-                installTabPatterns(bar);
+                adoptTabBar(static_cast<QTabBar *>(obj));
             } else if (ev->type() == QEvent::Polish && obj->inherits("Konsole::TerminalDisplay")) {
                 attachTerminalTint(static_cast<QWidget *>(obj));
             }
+        } else if (ev->type() == QEvent::ContextMenu && obj->inherits("Konsole::DetachableTabBar")) {
+            // Seen before Konsole opens its menu, so the menu knows which tab it's for.
+            auto *bar = static_cast<QTabBar *>(obj);
+            s_menuTab.insert(bar, bar->tabAt(static_cast<QContextMenuEvent *>(ev)->pos()));
+            hookTabMenus(bar);
         }
         return false;
     }
 };
-
-void installElideFilter()
-{
-    if (!isKonsoleProcess() || !qApp) {
-        return;
-    }
-    static ElideRightFilter *filter = nullptr;
-    if (!filter) {
-        filter = new ElideRightFilter(qApp);
-        qApp->installEventFilter(filter);
-        QTimer::singleShot(0, qApp, startPatternWatcher);
-        QTimer::singleShot(0, qApp, startGrabWatcher);
-        QTimer::singleShot(0, qApp, startUpdateWatcher);
-    }
-}
-Q_COREAPP_STARTUP_FUNCTION(installElideFilter)
 
 // ---------------------------------------------------------------------------
 // Konsole private symbols
@@ -289,7 +257,7 @@ void defer(std::function<void()> fn)
 {
     // Run after the menu's event handling unwinds: some actions may delete the
     // tab bar (and therefore this menu) or open nested dialogs.
-    QTimer::singleShot(0, qApp, std::move(fn));
+    QTimer::singleShot(0, root(), std::move(fn));
 }
 
 // ---------------------------------------------------------------------------
@@ -541,7 +509,7 @@ QVector<int> allTabSessionIds(QTabWidget *tw)
 // Patterned tab backgrounds (solid, two-tone, gradient, rainbow, stripes)
 // ---------------------------------------------------------------------------
 // Konsole only draws a tab's color as a 4 px line under the title. konsole-aware
-// publishes a background spec per session in $XDG_RUNTIME_DIR/konsole-aware/styles/tab-styles.json;
+// publishes a background spec per session in $XDG_RUNTIME_DIR/konsole-aware/styles/tab-styles-2.json;
 // a QProxyStyle on each tab bar fills the tab with it and draws the title in black or
 // white, whichever reads better on that pattern. The selected tab is drawn at full
 // strength with an accent bar, and the terminal under each tab is tinted to match.
@@ -572,7 +540,7 @@ QString stylesFilePath()
         const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR");
         dir = runtime.isEmpty() ? QStringLiteral("/tmp/konsole-aware-%1").arg(getuid()) : runtime + QStringLiteral("/konsole-aware");
     }
-    return dir + QStringLiteral("/styles/tab-styles.json");
+    return dir + QStringLiteral("/styles/tab-styles-2.json"); // 1.2 libraries read tab-styles.json
 }
 
 QVector<QColor> parseColors(const QJsonArray &arr)
@@ -644,17 +612,17 @@ void startPatternWatcher()
     }
     const QString file = stylesFilePath();
     QDir().mkpath(QFileInfo(file).absolutePath());
-    watcher = new QFileSystemWatcher(qApp);
+    watcher = new QFileSystemWatcher(root());
     watcher->addPath(QFileInfo(file).absolutePath()); // the file is replaced atomically
     if (QFile::exists(file)) {
         watcher->addPath(file);
     }
     // Coalesce bursts of changes into one reload and one repaint.
     static QTimer *debounce = nullptr;
-    debounce = new QTimer(qApp);
+    debounce = new QTimer(root());
     debounce->setSingleShot(true);
     debounce->setInterval(150);
-    QObject::connect(debounce, &QTimer::timeout, qApp, [file]() {
+    QObject::connect(debounce, &QTimer::timeout, root(), [file]() {
         loadPatterns();
         if (QFile::exists(file) && !watcher->files().contains(file)) {
             watcher->addPath(file);
@@ -662,13 +630,13 @@ void startPatternWatcher()
         repaintTabBars();
     });
     auto reload = []() { debounce->start(); };
-    QObject::connect(watcher, &QFileSystemWatcher::directoryChanged, qApp, reload);
-    QObject::connect(watcher, &QFileSystemWatcher::fileChanged, qApp, reload);
+    QObject::connect(watcher, &QFileSystemWatcher::directoryChanged, root(), reload);
+    QObject::connect(watcher, &QFileSystemWatcher::fileChanged, root(), reload);
     loadPatterns();
 }
 
 // README screenshots: with KONSOLE_AWARE_GRAB=/path/shot.png set, creating
-// /path/shot.png.request saves each Konsole window to shot.png, shot-2.png, ... It
+// /path/shot.png.grab saves each Konsole window to shot.png, shot-2.png, ... It
 // works under QT_QPA_PLATFORM=offscreen, so nothing shows up on the desktop.
 // A request file reading "menu <tab> [<submenu>]" first opens the right-click menu of
 // tab <tab> (counting from 0) in the first window, and that submenu, and the picture
@@ -730,7 +698,7 @@ void grabMenu(int tab, const QString &submenu)
     const QPoint at = bar->tabRect(tab).center();
     QCoreApplication::postEvent(bar, new QContextMenuEvent(QContextMenuEvent::Mouse, at, bar->mapToGlobal(at)));
     // The menu runs its own event loop; these timers fire inside it.
-    QTimer::singleShot(800, qApp, [window, submenu]() {
+    QTimer::singleShot(800, root(), [window, submenu]() {
         auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
         if (menu && !submenu.isEmpty()) {
             const auto actions = menu->actions();
@@ -741,7 +709,7 @@ void grabMenu(int tab, const QString &submenu)
                 }
             }
         }
-        QTimer::singleShot(800, qApp, [window]() {
+        QTimer::singleShot(800, root(), [window]() {
             grabWithPopups(window).save(grabTarget(0));
             while (QWidget *popup = QApplication::activePopupWidget()) {
                 popup->close();
@@ -755,10 +723,10 @@ void startGrabWatcher()
     if (qEnvironmentVariable("KONSOLE_AWARE_GRAB").isEmpty() || !isKonsoleProcess()) {
         return;
     }
-    auto *timer = new QTimer(qApp);
+    auto *timer = new QTimer(root());
     timer->setInterval(300);
-    QObject::connect(timer, &QTimer::timeout, qApp, []() {
-        QFile request(grabTarget(0) + QStringLiteral(".request"));
+    QObject::connect(timer, &QTimer::timeout, root(), []() {
+        QFile request(grabTarget(0) + QStringLiteral(".grab"));
         if (!request.exists()) {
             return;
         }
@@ -848,28 +816,28 @@ void syncUpdateTray()
     }
     static QAction *header = nullptr;
     if (!s_updateTray) {
-        s_updateTray = new QSystemTrayIcon(qApp);
+        s_updateTray = new QSystemTrayIcon(root());
         s_updateTray->setIcon(QIcon::fromTheme(QStringLiteral("update-high"), QIcon::fromTheme(QStringLiteral("system-software-update"))));
         auto *menu = new QMenu(); // the tray icon doesn't take ownership; it lives as long as Konsole
         header = menu->addAction(QString());
         header->setEnabled(false);
         menu->addSeparator();
         QObject::connect(menu->addAction(QIcon::fromTheme(QStringLiteral("system-software-update")), QStringLiteral("Install Update…")),
-                         &QAction::triggered, qApp, []() {
+                         &QAction::triggered, root(), []() {
                              // In a Konsole window, since the package manager asks for a password.
                              QProcess::startDetached(QCoreApplication::applicationFilePath(),
                                                      {QStringLiteral("--hold"), QStringLiteral("-e"), resolveCli(),
                                                       QStringLiteral("update"), QStringLiteral("install")});
                          });
         QObject::connect(menu->addAction(QIcon::fromTheme(QStringLiteral("help-about")), QStringLiteral("What's New")),
-                         &QAction::triggered, qApp, []() { QDesktopServices::openUrl(QUrl(s_updateNotice.url)); });
+                         &QAction::triggered, root(), []() { QDesktopServices::openUrl(QUrl(s_updateNotice.url)); });
         menu->addSeparator();
-        QObject::connect(menu->addAction(QStringLiteral("Remind Me Tomorrow")), &QAction::triggered, qApp,
+        QObject::connect(menu->addAction(QStringLiteral("Remind Me Tomorrow")), &QAction::triggered, root(),
                          []() { runCli({QStringLiteral("update"), QStringLiteral("later"), QStringLiteral("24")}); });
-        QObject::connect(menu->addAction(QStringLiteral("Skip This Version")), &QAction::triggered, qApp,
+        QObject::connect(menu->addAction(QStringLiteral("Skip This Version")), &QAction::triggered, root(),
                          []() { runCli({QStringLiteral("update"), QStringLiteral("skip"), s_updateNotice.latest}); });
         s_updateTray->setContextMenu(menu);
-        QObject::connect(s_updateTray, &QSystemTrayIcon::activated, qApp, [](QSystemTrayIcon::ActivationReason reason) {
+        QObject::connect(s_updateTray, &QSystemTrayIcon::activated, root(), [](QSystemTrayIcon::ActivationReason reason) {
             if (reason == QSystemTrayIcon::Trigger) {
                 QDesktopServices::openUrl(QUrl(s_updateNotice.url));
             }
@@ -889,19 +857,19 @@ void startUpdateWatcher()
     const QString file = updateFilePath();
     const QString dir = QFileInfo(file).absolutePath();
     QDir().mkpath(dir);
-    auto *watcher = new QFileSystemWatcher(QStringList{dir}, qApp); // the file is replaced atomically
-    auto *debounce = new QTimer(qApp);
+    auto *watcher = new QFileSystemWatcher(QStringList{dir}, root()); // the file is replaced atomically
+    auto *debounce = new QTimer(root());
     debounce->setSingleShot(true);
     debounce->setInterval(300);
-    QObject::connect(debounce, &QTimer::timeout, qApp, syncUpdateTray);
+    QObject::connect(debounce, &QTimer::timeout, root(), syncUpdateTray);
     QObject::connect(watcher, &QFileSystemWatcher::directoryChanged, debounce, qOverload<>(&QTimer::start));
     syncUpdateTray();
 
     auto check = []() { runCli({QStringLiteral("update"), QStringLiteral("check"), QStringLiteral("--auto")}); };
-    QTimer::singleShot(30 * 1000, qApp, check);
-    auto *hourly = new QTimer(qApp);
+    QTimer::singleShot(30 * 1000, root(), check);
+    auto *hourly = new QTimer(root());
     hourly->setInterval(60 * 60 * 1000);
-    QObject::connect(hourly, &QTimer::timeout, qApp, check);
+    QObject::connect(hourly, &QTimer::timeout, root(), check);
     hourly->start();
 }
 
@@ -1348,7 +1316,7 @@ public:
 // repaint it whole on a scroll instead, so the pattern stays put.
 
 constexpr int kBandHeight = 3;
-constexpr const char kBandName[] = "konsole_aware_band";
+constexpr const char kBandName[] = "konsole_aware_strip"; // 1.2 used "konsole_aware_band"
 
 class TerminalBand : public QWidget
 {
@@ -1441,7 +1409,7 @@ const QImage &tintImage(QWidget *display, const TabPattern &pat)
     TintImage &cached = s_tintImages[display];
     if (cached.key != key) {
         if (cached.key.isEmpty()) {
-            QObject::connect(display, &QObject::destroyed, qApp, [display]() { s_tintImages.remove(display); });
+            QObject::connect(display, &QObject::destroyed, root(), [display]() { s_tintImages.remove(display); });
         }
         cached.key = key;
         cached.image = QImage(display->size() * dpr, QImage::Format_ARGB32_Premultiplied);
@@ -1476,10 +1444,10 @@ void scheduleTerminalRefresh(bool repaint)
     static bool pendingRepaint = false;
     pendingRepaint = pendingRepaint || repaint;
     if (!timer) {
-        timer = new QTimer(qApp);
+        timer = new QTimer(root());
         timer->setSingleShot(true);
         timer->setInterval(30);
-        QObject::connect(timer, &QTimer::timeout, qApp, []() {
+        QObject::connect(timer, &QTimer::timeout, root(), []() {
             const bool r = pendingRepaint;
             pendingRepaint = false;
             refreshTerminals(r);
@@ -1533,11 +1501,11 @@ protected:
 
 void attachTerminalTint(QWidget *display)
 {
-    if (display->property("konsole_aware_tint").toBool() || !qEnvironmentVariableIsEmpty("KONSOLE_AWARE_NO_PATTERNS")) {
+    if (ownedHere(display, kTintOwner) || !qEnvironmentVariableIsEmpty("KONSOLE_AWARE_NO_PATTERNS")) {
         return;
     }
-    static TerminalTintFilter *filter = new TerminalTintFilter(qApp);
-    display->setProperty("konsole_aware_tint", true);
+    static TerminalTintFilter *filter = new TerminalTintFilter(root());
+    markOwned(display, kTintOwner);
     display->installEventFilter(filter);
 }
 
@@ -1562,12 +1530,14 @@ void refreshTerminals(bool repaint)
     }
 }
 
+QVector<QPointer<QTabBar>> s_styledBars; // tab bars wearing this module's style
+
 void installTabPatterns(QTabBar *bar)
 {
-    if (!bar || bar->property("konsole_aware_patterns").toBool() || !qEnvironmentVariableIsEmpty("KONSOLE_AWARE_NO_PATTERNS")) {
+    if (!bar || ownedHere(bar, kStyleOwner) || !qEnvironmentVariableIsEmpty("KONSOLE_AWARE_NO_PATTERNS")) {
         return;
     }
-    bar->setProperty("konsole_aware_patterns", true);
+    markOwned(bar, kStyleOwner);
     QStyle *base = QStyleFactory::create(qApp->style()->name());
     if (!base) {
         base = QStyleFactory::create(QStringLiteral("Fusion"));
@@ -1581,14 +1551,15 @@ void installTabPatterns(QTabBar *bar)
     auto *style = new TabPatternStyle(base);
     style->setParent(bar);
     bar->setStyle(style);
-    QObject::connect(bar, &QObject::destroyed, qApp, [bar]() { s_tabIds.remove(bar); });
+    s_styledBars.append(bar);
+    QObject::connect(bar, &QObject::destroyed, root(), [bar]() { s_tabIds.remove(bar); });
     // A moved tab keeps its colors: forget the cached tab -> session map at once.
-    QObject::connect(bar, &QTabBar::tabMoved, bar, [bar](int, int) {
+    QObject::connect(bar, &QTabBar::tabMoved, root(), [bar](int, int) {
         s_tabIds.remove(bar);
         bar->update();
         scheduleTerminalRefresh(true);
     });
-    QObject::connect(bar, &QTabBar::currentChanged, bar, [](int) { scheduleTerminalRefresh(false); });
+    QObject::connect(bar, &QTabBar::currentChanged, root(), [](int) { scheduleTerminalRefresh(false); });
 }
 
 // "Attach Tab To…", placed right after Konsole's own "Detach Tab".
@@ -1706,7 +1677,7 @@ void injectActions(QMenu *self, const TabCtx &ctx)
         });
     });
 
-    // 3b. Tab pattern (painted by this library; see tab-styles.json)
+    // 3b. Tab pattern (painted by this library; see tab-styles-2.json)
     QMenu *menuPattern = self->addMenu(QStringLiteral("Tab Pattern"));
     markInjected(menuPattern->menuAction());
     struct PatternChoice {
@@ -1945,62 +1916,157 @@ void injectActions(QMenu *self, const TabCtx &ctx)
                     {QStringLiteral("organize"), QStringLiteral("--by"), QStringLiteral("project")});
 }
 
-using QMenuExecFn = QAction *(*)(QMenu *, const QPoint &, QAction *);
+// The tab right-click menu: fill it in as it opens, take the items out after it closes.
+QVector<QPointer<QMenu>> s_hookedMenus;
 
-QMenuExecFn realExec()
+void fillTabMenu(QMenu *menu)
 {
-    static QMenuExecFn fn = nullptr;
-    if (!fn) {
-        fn = reinterpret_cast<QMenuExecFn>(dlsym(RTLD_NEXT, "_ZN5QMenu4execERK6QPointP7QAction"));
-    }
-    return fn;
-}
-
-} // namespace
-
-// Interposes QMenu::exec(const QPoint &p, QAction *action = nullptr)
-extern "C" __attribute__((visibility("default"))) QAction *_ZN5QMenu4execERK6QPointP7QAction(QMenu *self, const QPoint &p, QAction *action)
-{
-    const QMenuExecFn real = realExec();
-    if (!real) {
-        return nullptr;
-    }
-    if (!self || !isKonsoleProcess()) {
-        return real(self, p, action);
-    }
-
-    // Structural check: the menu must belong to the tab bar of a Konsole::TabbedViewContainer.
-    auto *tabBar = qobject_cast<QTabBar *>(self->parentWidget());
+    auto *tabBar = qobject_cast<QTabBar *>(menu->parentWidget());
     auto *tw = tabBar ? qobject_cast<QTabWidget *>(tabBar->parentWidget()) : nullptr;
-    if (!tw || !tw->inherits("Konsole::TabbedViewContainer") || tw->tabBar() != tabBar || !looksLikeKonsoleTabMenu(self)) {
-        return real(self, p, action);
+    // Drop anything left over, including items a 1.2 library still in this Konsole added.
+    removeInjected(menu, false);
+    if (!tw || !tw->inherits("Konsole::TabbedViewContainer") || tw->tabBar() != tabBar || !looksLikeKonsoleTabMenu(menu)) {
+        return;
     }
-
     tabBar->setElideMode(Qt::ElideRight);
     tabBar->setUsesScrollButtons(true);
-
-    // Drop anything left over from a previous display (including submenus).
-    removeInjected(self, false);
-
-    // Konsole computes the index as tabBar()->tabAt(point) and execs at mapToGlobal(point).
-    const int tabIndex = tabBar->tabAt(tabBar->mapFromGlobal(p));
+    const int tabIndex = s_menuTab.value(tabBar, -1);
     if (tabIndex < 0 || tabIndex >= tw->count()) {
-        return real(self, p, action);
+        return;
     }
-
     TabCtx ctx;
     ctx.container = tw;
     ctx.page = tw->widget(tabIndex);
     ctx.sessionId = sessionIdForTab(tw, tabIndex);
     ctx.service = konsoleService();
+    injectActions(menu, ctx);
+}
 
-    injectActions(self, ctx);
-
-    const QPointer<QMenu> guard(self);
-    QAction *result = real(self, p, action);
-    if (guard) {
-        // Deferred so `result` stays valid for the caller.
-        removeInjected(guard.data(), true);
+void hookTabMenus(QTabBar *bar)
+{
+    const auto menus = bar->findChildren<QMenu *>(Qt::FindDirectChildrenOnly);
+    for (QMenu *menu : menus) {
+        if (ownedHere(menu, kMenuOwner)) {
+            continue;
+        }
+        markOwned(menu, kMenuOwner);
+        s_hookedMenus.append(menu);
+        QObject::connect(menu, &QMenu::aboutToShow, root(), [menu]() { fillTabMenu(menu); });
+        QObject::connect(menu, &QMenu::aboutToHide, root(), [menu]() {
+            // After the chosen item has run: its handler is already queued by then.
+            const QPointer<QMenu> guard(menu);
+            QTimer::singleShot(0, root(), [guard]() {
+                if (guard && !guard->isVisible()) {
+                    removeInjected(guard.data(), true);
+                }
+            });
+        });
     }
-    return result;
+}
+
+// Set up on widgets that already exist: a module loaded into a running Konsole, or a
+// newer copy replacing an older one, missed their Polish events.
+void adoptExisting()
+{
+    const auto tops = QApplication::topLevelWidgets();
+    for (QWidget *top : tops) {
+        if (!top->inherits("Konsole::MainWindow")) {
+            continue;
+        }
+        const auto bars = top->findChildren<QTabBar *>();
+        for (QTabBar *bar : bars) {
+            if (bar->inherits("Konsole::DetachableTabBar")) {
+                adoptTabBar(bar);
+                bar->update();
+            }
+        }
+    }
+    refreshTerminals(true);
+}
+
+void moduleStart()
+{
+    if (s_root || !isKonsoleProcess()) {
+        return;
+    }
+    s_root = new QObject();
+    s_root->setObjectName(QStringLiteral("konsole_aware_module"));
+    qApp->installEventFilter(new ElideRightFilter(s_root)); // removed when the root goes
+    startPatternWatcher();
+    startGrabWatcher();
+    startUpdateWatcher();
+    adoptExisting();
+}
+
+// Take down everything moduleStart() and the code since then set up, leaving Konsole as
+// it would be without konsole-aware, ready for the next copy to start.
+void moduleStop()
+{
+    if (!s_root) {
+        return;
+    }
+    for (const QPointer<QMenu> &menu : std::as_const(s_hookedMenus)) {
+        if (menu) {
+            removeInjected(menu.data(), false);
+            menu->setProperty(kMenuOwner, QVariant());
+        }
+    }
+    s_hookedMenus.clear();
+    for (const QPointer<QTabBar> &bar : std::as_const(s_styledBars)) {
+        if (bar && ownedHere(bar, kStyleOwner)) {
+            QStyle *ours = bar->style();
+            bar->setStyle(nullptr);
+            if (ours != qApp->style() && ours->parent() == bar) {
+                delete ours;
+            }
+            bar->setProperty(kStyleOwner, QVariant());
+            bar->update();
+        }
+    }
+    s_styledBars.clear();
+    // Collect the terminals first: the strips deleted below are in the same child lists.
+    QVector<QWidget *> displays;
+    const auto tops = QApplication::topLevelWidgets();
+    for (QWidget *top : tops) {
+        const auto children = top->findChildren<QWidget *>();
+        for (QWidget *w : children) {
+            if (w->inherits("Konsole::TerminalDisplay")) {
+                displays.append(w);
+            }
+        }
+    }
+    for (QWidget *w : std::as_const(displays)) {
+        delete w->findChild<QWidget *>(QLatin1String(kBandName), Qt::FindDirectChildrenOnly);
+        if (w->property("konsole_aware_opaque").isValid()) {
+            w->setAttribute(Qt::WA_OpaquePaintEvent, w->property("konsole_aware_opaque").toBool());
+        }
+        w->setProperty(kTintOwner, QVariant());
+        w->update();
+    }
+    if (s_updateTray) {
+        delete s_updateTray->contextMenu();
+    }
+    s_updateTray = nullptr; // deleted with the root
+    s_tabIds.clear();
+    s_tintImages.clear();
+    s_menuTab.clear();
+    delete s_root; // timers, watchers, event filters and their connections
+    s_root = nullptr;
+}
+
+} // namespace
+
+extern "C" __attribute__((visibility("default"))) int ka_module_abi()
+{
+    return 1;
+}
+
+extern "C" __attribute__((visibility("default"))) void ka_module_start()
+{
+    moduleStart();
+}
+
+extern "C" __attribute__((visibility("default"))) void ka_module_stop()
+{
+    moduleStop();
 }

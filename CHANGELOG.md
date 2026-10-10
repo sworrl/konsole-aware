@@ -5,6 +5,24 @@ Every change worth knowing about is listed here. The format follows
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-10
+
+### Added
+- Updates without restarting Konsole. Konsole now preloads a small loader that never changes, and the right-click
+  menu, tab fills, terminal tint and tray icon live in a module the loader reloads whenever an update replaces it.
+  Open Konsole windows switch to the new version within about a second, for source installs, `update install`, and
+  package upgrades through apt, dnf or Discover alike. Uninstalling takes konsole-aware out of open windows too.
+- `konsole-aware hotload` brings Konsole windows that were opened before 1.4 (or restored by Plasma at login) onto the
+  loader without closing them. It loads the loader with gdb and asks for your password once. `--check` lists which
+  Konsole processes update in place. `update install` runs it when needed.
+
+### Changed
+- The right-click menu fills itself in from Konsole's `aboutToShow` instead of hooking `QMenu::exec`, so it can be
+  swapped while Konsole runs.
+- Tab fill specs moved to `styles/tab-styles-2.json`. A 1.2 library still loaded in a Konsole reads the old file,
+  which `hotload` removes once every Konsole runs the new module, so the old code has nothing left to paint.
+- The screenshot hook (`KONSOLE_AWARE_GRAB`) takes requests as `<path>.grab`.
+
 ## [1.3.0] - 2026-10-09
 
 ### Added
@@ -108,7 +126,8 @@ Every change worth knowing about is listed here. The format follows
 - Initial release: tab titles, colors and badges for Konsole; agy and Claude Code hooks; tab grouping, anchoring,
   organizing, detaching and split views; context menu.
 
-[Unreleased]: https://github.com/sworrl/konsole-aware/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/sworrl/konsole-aware/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/sworrl/konsole-aware/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/sworrl/konsole-aware/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/sworrl/konsole-aware/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/sworrl/konsole-aware/compare/v1.0.0...v1.1.0

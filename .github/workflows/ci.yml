@@ -35,5 +35,8 @@ jobs:
       - name: Install Qt 6 headers
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qt6-base-dev pkg-config g++ make >/dev/null
       - run: make -C menu_hook
-      - name: Only the QMenu::exec interposer is exported
-        run: test "$(nm -D --defined-only menu_hook/libkonsole_aware_menu.so | grep -c ' T ')" = 1
+      - name: Only the entry points are exported
+        run: |
+          test "$(nm -D --defined-only menu_hook/libkonsole_aware_menu.so | grep -c ' T ')" = 1
+          test "$(nm -D --defined-only menu_hook/libkonsole_aware_module.so | grep -c ' T ka_module_')" = 3
+          test "$(nm -D --defined-only menu_hook/libkonsole_aware_module.so | grep -c ' T ')" = 3

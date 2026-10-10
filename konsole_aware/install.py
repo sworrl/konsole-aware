@@ -42,6 +42,19 @@ AGY_HOOK_NAME = "konsole-aware"
 
 WRAPPER_MARKER = "# konsole-aware konsole wrapper"
 SYSTEM_BIN = "/usr/bin/konsole-aware"
+LOADER_NAME = "libkonsole_aware_menu.so"     # preloaded into Konsole; stays the same between releases
+MODULE_NAME = "libkonsole_aware_module.so"   # the real code; open Konsoles reload it when it changes
+SYSTEM_MODULE = "/usr/lib/konsole-aware/menu_hook/" + MODULE_NAME
+
+
+def _replace_file(source: Path, target: Path) -> None:
+    """Copy `source` over `target` with a rename. A running Konsole has these libraries
+    mapped, and rewriting mapped pages can crash or hang it; a rename also is what the
+    loader watches for."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.tmp.{os.getpid()}")
+    shutil.copy2(source, tmp)
+    os.replace(tmp, target)
 
 
 def is_system_install(repo_root: Path) -> bool:
@@ -215,9 +228,11 @@ def _install_menu_hook(repo_root: Path, home: Path, local_bin: Path, out: Callab
     menu_hook_dir = repo_root / "menu_hook"
     if not (menu_hook_dir / "Makefile").exists():
         return 0
-    prebuilt = menu_hook_dir / "libkonsole_aware_menu.so"
-    if is_system_install(repo_root):
-        if not prebuilt.exists():
+    system = is_system_install(repo_root)
+    loader = menu_hook_dir / LOADER_NAME
+    module = menu_hook_dir / MODULE_NAME
+    if system:
+        if not loader.exists():
             out("⚠ Skipped tab context-menu hook (the package has no prebuilt library)")
             return 0
     else:
@@ -229,14 +244,18 @@ def _install_menu_hook(repo_root: Path, home: Path, local_bin: Path, out: Callab
             return 0
 
     local_lib = home / ".local" / "lib"
-    local_lib.mkdir(parents=True, exist_ok=True)
-    target_so = local_lib / "libkonsole_aware_menu.so"
-    # Never overwrite the library in place: a running Konsole has it mapped, and rewriting
-    # mapped pages can crash or hang it. Write a new file and rename it over the old one.
-    tmp_so = target_so.with_name(f".{target_so.name}.tmp.{os.getpid()}")
-    shutil.copy2(prebuilt, tmp_so)
-    os.replace(tmp_so, target_so)
-    out(f"✓ Installed context menu hook library: {target_so}")
+    target_so = local_lib / LOADER_NAME
+    _replace_file(loader, target_so)
+    out(f"✓ Installed context menu loader: {target_so}")
+    local_module = local_lib / "konsole-aware" / MODULE_NAME
+    if system:
+        # The package's own copy is used, so a package upgrade reaches open Konsoles by itself.
+        if local_module.exists():
+            local_module.unlink()
+    else:
+        # Open Konsole windows notice this file change and switch to the new code.
+        _replace_file(module, local_module)
+        out(f"✓ Installed context menu module: {local_module} (open Konsole windows switch to it now)")
 
     real_konsole = shutil.which("konsole", path="/usr/local/bin:/usr/bin:/bin") or "/usr/bin/konsole"
     wrapper = local_bin / "konsole"
@@ -248,8 +267,9 @@ def _install_menu_hook(repo_root: Path, home: Path, local_bin: Path, out: Callab
         "#!/bin/bash\n"
         f"{WRAPPER_MARKER}\n"
         f'HOOK_LIB="{target_so}"\n'
-        f'export KONSOLE_AWARE_BIN="{SYSTEM_BIN if is_system_install(repo_root) else local_bin / "konsole-aware"}"\n'
-        'if [ -f "$HOOK_LIB" ]; then\n'
+        f'export KONSOLE_AWARE_BIN="{SYSTEM_BIN if system else local_bin / "konsole-aware"}"\n'
+        + (f'export KONSOLE_AWARE_MODULE="{SYSTEM_MODULE}"\n' if system else "")
+        + 'if [ -f "$HOOK_LIB" ]; then\n'
         '    export LD_PRELOAD="${HOOK_LIB}${LD_PRELOAD:+:$LD_PRELOAD}"\n'
         "fi\n"
         f'exec {real_konsole} "$@"\n',
@@ -280,7 +300,6 @@ def _install_menu_hook(repo_root: Path, home: Path, local_bin: Path, out: Callab
         except OSError:
             pass
         out(f"✓ Installed desktop application entry: {local_desktop}")
-        out("  Restart Konsole (quit all windows) for the tab context menu to load.")
     return 0
 
 
@@ -299,10 +318,14 @@ def uninstall(home: Optional[Path] = None, out: Callable[[str], None] = print) -
             wrapper.unlink()
             out(f"✓ Removed konsole wrapper: {wrapper}")
 
-    local_so = home / ".local" / "lib" / "libkonsole_aware_menu.so"
+    local_so = home / ".local" / "lib" / LOADER_NAME
     if local_so.exists():
         local_so.unlink()
         out(f"✓ Removed context menu hook: {local_so}")
+    local_module = home / ".local" / "lib" / "konsole-aware" / MODULE_NAME
+    if local_module.exists():
+        local_module.unlink()  # open Konsole windows drop konsole-aware when it goes
+        out(f"✓ Removed context menu module: {local_module}")
 
     local_desktop = home / ".local" / "share" / "applications" / "org.kde.konsole.desktop"
     if local_desktop.exists():
