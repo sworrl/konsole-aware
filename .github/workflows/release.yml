@@ -44,6 +44,10 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Stable names for the releases/latest/download links
+        run: |
+          cp dist/konsole-aware_*_amd64.deb dist/konsole-aware_amd64.deb
+          cp dist/konsole-aware-*.x86_64.rpm dist/konsole-aware.x86_64.rpm
       - name: Release notes from CHANGELOG.md
         run: |
           version="${GITHUB_REF_NAME#v}"

@@ -76,6 +76,7 @@ class Notifier:
         is_error: bool = False,
         play_sound: bool = True,
         icon: str = "utilities-terminal",
+        transient: bool = True,
     ) -> None:
         """Send desktop notification and optional audio cue."""
         if not self.config.get("enable_desktop_notifications", True):
@@ -100,9 +101,10 @@ class Notifier:
                 "-a", "Konsole Aware",
                 "-i", icon,
                 "-u", urgency,
-                # Transient: pops up and fades without piling up in the notification history.
-                "--hint=boolean:transient:true",
             ]
+            if transient:
+                # Pops up and fades without piling up in the notification history.
+                cmd.append("--hint=boolean:transient:true")
             if urgency != "critical" and timeout_s and float(timeout_s) > 0:
                 cmd.extend(["-t", str(int(float(timeout_s) * 1000))])
             if sound_file:

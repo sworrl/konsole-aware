@@ -5,6 +5,32 @@ Every change worth knowing about is listed here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-09
+
+### Added
+- Update check. konsole-aware looks for new releases on GitHub (at most every 12 hours, `update_check_hours`), sends
+  one notification per new version, and shows a tray icon until you update or dismiss it. The tray menu has Install
+  Update…, What's New, Remind Me Tomorrow and Skip This Version. `"update_check": false` turns it off.
+- `konsole-aware update` (`status`, `check`, `install`, `skip`, `later`). `update install` updates the way you
+  installed: the new `.deb` through apt, the new `.rpm` through dnf, zypper or rpm, or `git pull` for a checkout.
+- Every release also has `konsole-aware_amd64.deb` and `konsole-aware.x86_64.rpm`, so
+  `releases/latest/download/...` links always get the newest package.
+- `flag` pattern: the American flag, with stripes and a canton of stars. About one tab in ten gets it at random
+  (`flag_chance`, 0 turns it off). A tab keeps it while it's open. Also in `tab-style`, `colors set --pattern` and the
+  Tab Pattern menu.
+
+### Changed
+- A terminal shows the same pattern as its tab, drawn at the terminal's size. Two-tone, stripes and the flag used to
+  turn into a plain left-to-right blend in the terminal. The strip along the top of the terminal is the top edge of
+  the same pattern.
+- Gradients are mixed in OKLab, so the middle of a blend stays bright instead of going gray or brown.
+- Two-tone has a short blend where the colors meet instead of a hard edge.
+- New project palette and rainbow: hues evenly spaced around the wheel at matching lightness. Projects on an old
+  palette color move to the new color in the same slot. A one-color gradient pairs with a neighboring hue instead of
+  one a third of the way around the wheel.
+- Tabs have a soft light along their outer edge, unselected tabs a thin edge in their own colors, and titles a
+  one-pixel shadow where the pattern has light and dark parts.
+
 ## [1.2.0] - 2026-10-09
 
 ### Added
@@ -82,7 +108,8 @@ Every change worth knowing about is listed here. The format follows
 - Initial release: tab titles, colors and badges for Konsole; agy and Claude Code hooks; tab grouping, anchoring,
   organizing, detaching and split views; context menu.
 
-[Unreleased]: https://github.com/sworrl/konsole-aware/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/sworrl/konsole-aware/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/sworrl/konsole-aware/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/sworrl/konsole-aware/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/sworrl/konsole-aware/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/sworrl/konsole-aware/releases/tag/v1.0.0

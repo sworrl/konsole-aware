@@ -40,6 +40,9 @@ echo "konsole-aware installed. Each user enables it with: konsole-aware install"
 /usr/share/doc/konsole-aware
 
 %changelog
+* Fri Oct 09 2026 sworrl <github@falcontechnix.com> - 1.3.0-1
+- See CHANGELOG.md
+
 * Fri Oct 09 2026 sworrl <github@falcontechnix.com> - 1.2.0-1
 - See CHANGELOG.md
 

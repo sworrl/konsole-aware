@@ -29,6 +29,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <cmath>
 #include <functional>
 #include <string>
 
@@ -36,6 +37,7 @@
 #include <QApplication>
 #include <QColor>
 #include <QColorDialog>
+#include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
@@ -46,6 +48,9 @@
 #include <QFile>
 #include <QFileSystemWatcher>
 #include <QHash>
+#include <QIcon>
+#include <QImage>
+#include <QPixmap>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -54,6 +59,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QProxyStyle>
+#include <QDesktopServices>
+#include <QSystemTrayIcon>
+#include <QUrl>
 #include <QStyleFactory>
 #include <QStyleOptionTab>
 #include <QFileInfo>
@@ -154,6 +162,7 @@ void installTabPatterns(QTabBar *bar);
 void attachTerminalTint(QWidget *display);
 void startPatternWatcher();
 void startGrabWatcher();
+void startUpdateWatcher();
 
 class ElideRightFilter : public QObject
 {
@@ -189,6 +198,7 @@ void installElideFilter()
         qApp->installEventFilter(filter);
         QTimer::singleShot(0, qApp, startPatternWatcher);
         QTimer::singleShot(0, qApp, startGrabWatcher);
+        QTimer::singleShot(0, qApp, startUpdateWatcher);
     }
 }
 Q_COREAPP_STARTUP_FUNCTION(installElideFilter)
@@ -660,35 +670,239 @@ void startPatternWatcher()
 // README screenshots: with KONSOLE_AWARE_GRAB=/path/shot.png set, creating
 // /path/shot.png.request saves each Konsole window to shot.png, shot-2.png, ... It
 // works under QT_QPA_PLATFORM=offscreen, so nothing shows up on the desktop.
+// A request file reading "menu <tab> [<submenu>]" first opens the right-click menu of
+// tab <tab> (counting from 0) in the first window, and that submenu, and the picture
+// includes the open menus.
+
+QString grabTarget(int n)
+{
+    QString path = qEnvironmentVariable("KONSOLE_AWARE_GRAB");
+    if (n > 0) {
+        path.replace(QStringLiteral(".png"), QStringLiteral("-%1.png").arg(n + 1));
+    }
+    return path;
+}
+
+QList<QWidget *> konsoleWindows()
+{
+    QList<QWidget *> out;
+    const auto tops = QApplication::topLevelWidgets();
+    for (QWidget *w : tops) {
+        if (w->isVisible() && w->inherits("Konsole::MainWindow")) {
+            out.append(w);
+        }
+    }
+    return out;
+}
+
+// The window plus any open menus over it, in one picture.
+QImage grabWithPopups(QWidget *window)
+{
+    QList<QWidget *> popups;
+    QRect area = window->geometry();
+    const auto tops = QApplication::topLevelWidgets();
+    for (QWidget *w : tops) {
+        if (w->isVisible() && qobject_cast<QMenu *>(w)) {
+            popups.append(w);
+            area |= w->geometry();
+        }
+    }
+    const qreal dpr = window->devicePixelRatioF();
+    QImage canvas(area.size() * dpr, QImage::Format_ARGB32_Premultiplied);
+    canvas.setDevicePixelRatio(dpr);
+    canvas.fill(Qt::transparent);
+    QPainter p(&canvas);
+    p.drawPixmap(window->geometry().topLeft() - area.topLeft(), window->grab());
+    for (QWidget *menu : popups) { // parents open before their submenus, so submenus land on top
+        p.drawPixmap(menu->geometry().topLeft() - area.topLeft(), menu->grab());
+    }
+    return canvas;
+}
+
+void grabMenu(int tab, const QString &submenu)
+{
+    const auto windows = konsoleWindows();
+    QTabBar *bar = windows.isEmpty() ? nullptr : windows.first()->findChild<QTabBar *>();
+    if (!bar || tab < 0 || tab >= bar->count()) {
+        return;
+    }
+    QWidget *window = windows.first();
+    const QPoint at = bar->tabRect(tab).center();
+    QCoreApplication::postEvent(bar, new QContextMenuEvent(QContextMenuEvent::Mouse, at, bar->mapToGlobal(at)));
+    // The menu runs its own event loop; these timers fire inside it.
+    QTimer::singleShot(800, qApp, [window, submenu]() {
+        auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        if (menu && !submenu.isEmpty()) {
+            const auto actions = menu->actions();
+            for (QAction *a : actions) {
+                if (a->menu() && a->text().remove(QLatin1Char('&')) == submenu) {
+                    menu->setActiveAction(a);
+                    break;
+                }
+            }
+        }
+        QTimer::singleShot(800, qApp, [window]() {
+            grabWithPopups(window).save(grabTarget(0));
+            while (QWidget *popup = QApplication::activePopupWidget()) {
+                popup->close();
+            }
+        });
+    });
+}
+
 void startGrabWatcher()
 {
-    const QString target = qEnvironmentVariable("KONSOLE_AWARE_GRAB");
-    if (target.isEmpty() || !isKonsoleProcess()) {
+    if (qEnvironmentVariable("KONSOLE_AWARE_GRAB").isEmpty() || !isKonsoleProcess()) {
         return;
     }
     auto *timer = new QTimer(qApp);
     timer->setInterval(300);
-    QObject::connect(timer, &QTimer::timeout, qApp, [target]() {
-        const QString request = target + QStringLiteral(".request");
-        if (!QFile::exists(request)) {
+    QObject::connect(timer, &QTimer::timeout, qApp, []() {
+        QFile request(grabTarget(0) + QStringLiteral(".request"));
+        if (!request.exists()) {
             return;
         }
-        QFile::remove(request);
+        QString what;
+        if (request.open(QIODevice::ReadOnly)) {
+            what = QString::fromUtf8(request.readAll()).trimmed();
+            request.close();
+        }
+        request.remove();
+        if (what.startsWith(QLatin1String("menu"))) {
+            const QStringList parts = what.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            grabMenu(parts.value(1).toInt(), parts.mid(2).join(QLatin1Char(' ')));
+            return;
+        }
         int n = 0;
-        const auto tops = QApplication::topLevelWidgets();
-        for (QWidget *w : tops) {
-            if (!w->isVisible() || !w->inherits("Konsole::MainWindow")) {
-                continue;
-            }
-            QString path = target;
-            if (n > 0) {
-                path.replace(QStringLiteral(".png"), QStringLiteral("-%1.png").arg(n + 1));
-            }
-            w->grab().save(path);
-            ++n;
+        const auto windows = konsoleWindows();
+        for (QWidget *w : windows) {
+            w->grab().save(grabTarget(n++));
         }
     });
     timer->start();
+}
+
+// ---------------------------------------------------------------------------
+// Update notice: a tray icon while a newer release is out
+// ---------------------------------------------------------------------------
+// A little after Konsole starts, and every hour after that, the library runs
+// `konsole-aware update check --auto`. That looks on GitHub at most every
+// `update_check_hours`, notifies once per new version, and writes update.json. While
+// update.json says "show", one Konsole process (whichever holds the bus name below)
+// shows a tray icon with a menu to install the update, read what's new, snooze or skip.
+
+QString updateFilePath()
+{
+    QString base = qEnvironmentVariable("XDG_CACHE_HOME");
+    if (base.isEmpty()) {
+        base = QDir::homePath() + QStringLiteral("/.cache");
+    }
+    return base + QStringLiteral("/konsole-aware/update.json");
+}
+
+struct UpdateNotice {
+    bool show = false;
+    QString latest, current, url;
+};
+
+UpdateNotice readUpdateNotice()
+{
+    UpdateNotice n;
+    QFile f(updateFilePath());
+    if (!f.open(QIODevice::ReadOnly)) {
+        return n;
+    }
+    const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    n.show = o.value(QStringLiteral("show")).toBool(false);
+    n.latest = o.value(QStringLiteral("latest")).toString();
+    n.current = o.value(QStringLiteral("current")).toString();
+    n.url = o.value(QStringLiteral("url")).toString(QStringLiteral("https://github.com/sworrl/konsole-aware/releases/latest"));
+    return n;
+}
+
+// Only one tray icon however many Konsole processes run.
+bool ownsUpdateTray()
+{
+    static bool owned = false;
+    if (!owned) {
+        QDBusConnection bus = QDBusConnection::sessionBus();
+        owned = bus.isConnected() && bus.registerService(QStringLiteral("org.konsole_aware.Updates"));
+    }
+    return owned;
+}
+
+QSystemTrayIcon *s_updateTray = nullptr;
+UpdateNotice s_updateNotice;
+
+void syncUpdateTray()
+{
+    s_updateNotice = readUpdateNotice();
+    if (!s_updateNotice.show || s_updateNotice.latest.isEmpty()) {
+        if (s_updateTray) {
+            s_updateTray->hide();
+        }
+        return;
+    }
+    if (!QSystemTrayIcon::isSystemTrayAvailable() || !ownsUpdateTray()) {
+        return;
+    }
+    static QAction *header = nullptr;
+    if (!s_updateTray) {
+        s_updateTray = new QSystemTrayIcon(qApp);
+        s_updateTray->setIcon(QIcon::fromTheme(QStringLiteral("update-high"), QIcon::fromTheme(QStringLiteral("system-software-update"))));
+        auto *menu = new QMenu(); // the tray icon doesn't take ownership; it lives as long as Konsole
+        header = menu->addAction(QString());
+        header->setEnabled(false);
+        menu->addSeparator();
+        QObject::connect(menu->addAction(QIcon::fromTheme(QStringLiteral("system-software-update")), QStringLiteral("Install Update…")),
+                         &QAction::triggered, qApp, []() {
+                             // In a Konsole window, since the package manager asks for a password.
+                             QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                                     {QStringLiteral("--hold"), QStringLiteral("-e"), resolveCli(),
+                                                      QStringLiteral("update"), QStringLiteral("install")});
+                         });
+        QObject::connect(menu->addAction(QIcon::fromTheme(QStringLiteral("help-about")), QStringLiteral("What's New")),
+                         &QAction::triggered, qApp, []() { QDesktopServices::openUrl(QUrl(s_updateNotice.url)); });
+        menu->addSeparator();
+        QObject::connect(menu->addAction(QStringLiteral("Remind Me Tomorrow")), &QAction::triggered, qApp,
+                         []() { runCli({QStringLiteral("update"), QStringLiteral("later"), QStringLiteral("24")}); });
+        QObject::connect(menu->addAction(QStringLiteral("Skip This Version")), &QAction::triggered, qApp,
+                         []() { runCli({QStringLiteral("update"), QStringLiteral("skip"), s_updateNotice.latest}); });
+        s_updateTray->setContextMenu(menu);
+        QObject::connect(s_updateTray, &QSystemTrayIcon::activated, qApp, [](QSystemTrayIcon::ActivationReason reason) {
+            if (reason == QSystemTrayIcon::Trigger) {
+                QDesktopServices::openUrl(QUrl(s_updateNotice.url));
+            }
+        });
+    }
+    const QString text = QStringLiteral("konsole-aware %1 is out").arg(s_updateNotice.latest);
+    header->setText(s_updateNotice.current.isEmpty() ? text : text + QStringLiteral(" (you have %1)").arg(s_updateNotice.current));
+    s_updateTray->setToolTip(header->text());
+    s_updateTray->show();
+}
+
+void startUpdateWatcher()
+{
+    if (!isKonsoleProcess() || !qEnvironmentVariableIsEmpty("KONSOLE_AWARE_NO_UPDATES")) {
+        return;
+    }
+    const QString file = updateFilePath();
+    const QString dir = QFileInfo(file).absolutePath();
+    QDir().mkpath(dir);
+    auto *watcher = new QFileSystemWatcher(QStringList{dir}, qApp); // the file is replaced atomically
+    auto *debounce = new QTimer(qApp);
+    debounce->setSingleShot(true);
+    debounce->setInterval(300);
+    QObject::connect(debounce, &QTimer::timeout, qApp, syncUpdateTray);
+    QObject::connect(watcher, &QFileSystemWatcher::directoryChanged, debounce, qOverload<>(&QTimer::start));
+    syncUpdateTray();
+
+    auto check = []() { runCli({QStringLiteral("update"), QStringLiteral("check"), QStringLiteral("--auto")}); };
+    QTimer::singleShot(30 * 1000, qApp, check);
+    auto *hourly = new QTimer(qApp);
+    hourly->setInterval(60 * 60 * 1000);
+    QObject::connect(hourly, &QTimer::timeout, qApp, check);
+    hourly->start();
 }
 
 // Session id of each tab, cached per tab bar for a second (paint runs often). Moving a
@@ -763,7 +977,8 @@ bool patternForTab(const QTabBar *bar, int index, TabPattern *out)
         return false;
     }
     *out = it.value();
-    if (s_followPosition && !s_positionPalette.isEmpty() && out->pattern != QLatin1String("rainbow")) {
+    if (s_followPosition && !s_positionPalette.isEmpty() && out->pattern != QLatin1String("rainbow")
+        && out->pattern != QLatin1String("flag")) {
         // Opt-in: the first color comes from the tab's position, so dragging recolors it.
         out->colors[0] = s_positionPalette.at(index % s_positionPalette.size());
     }
@@ -832,17 +1047,162 @@ QColor textColorFor(const TabPattern &p, const QColor &background, double opacit
     return luminance(avg) > 0.55 ? QColor(20, 20, 20) : QColor(250, 250, 250);
 }
 
-// Fill `r` with the pattern (no clipping, opacity, or shape: callers set those).
+// Patterns with light and dark parts (the flag, stripes of very different colors) get a
+// shadow under the tab title so it reads over both.
+bool mixedContrast(const TabPattern &p)
+{
+    if (p.pattern == QLatin1String("flag")) {
+        return true;
+    }
+    double lo = 1, hi = 0;
+    for (const QColor &c : p.colors) {
+        lo = qMin(lo, luminance(c));
+        hi = qMax(hi, luminance(c));
+    }
+    return hi - lo > 0.3;
+}
+
+// Gradients are mixed in OKLab, which keeps the in-between colors as bright and clean
+// as the ends. Mixing in RGB goes muddy and dark between colors far apart on the wheel.
+struct Lab {
+    double L, a, b;
+};
+
+double toLinear(double c)
+{
+    return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+}
+
+double toSrgb(double c)
+{
+    c = qBound(0.0, c, 1.0);
+    return c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1 / 2.4) - 0.055;
+}
+
+Lab toOklab(const QColor &c)
+{
+    const double r = toLinear(c.redF()), g = toLinear(c.greenF()), b = toLinear(c.blueF());
+    const double l = std::cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    const double m = std::cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    const double s = std::cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    return {0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s, 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+            0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s};
+}
+
+QColor fromOklab(const Lab &o)
+{
+    const double l = std::pow(o.L + 0.3963377774 * o.a + 0.2158037573 * o.b, 3);
+    const double m = std::pow(o.L - 0.1055613458 * o.a - 0.0638541728 * o.b, 3);
+    const double s = std::pow(o.L - 0.0894841775 * o.a - 1.2914855480 * o.b, 3);
+    return QColor::fromRgbF(toSrgb(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+                            toSrgb(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+                            toSrgb(-0.0041960863 * l - 0.7034186147 * m + 1.7076127010 * s));
+}
+
+QColor mixOklab(const QColor &a, const QColor &b, double t)
+{
+    const Lab x = toOklab(a), y = toOklab(b);
+    return fromOklab({x.L + (y.L - x.L) * t, x.a + (y.a - x.a) * t, x.b + (y.b - x.b) * t});
+}
+
+// Stops for `colors` spread evenly between positions `from` and `to` of `grad`.
+void addStops(QGradient &grad, const QVector<QColor> &colors, double from, double to)
+{
+    if (colors.size() == 1) {
+        grad.setColorAt(from, colors[0]);
+        grad.setColorAt(to, colors[0]);
+        return;
+    }
+    constexpr int kSteps = 8; // stops between each pair; Qt mixes in RGB between them
+    const int spans = colors.size() - 1;
+    for (int i = 0; i < spans; ++i) {
+        for (int k = i == 0 ? 0 : 1; k <= kSteps; ++k) {
+            const double t = double(k) / kSteps;
+            grad.setColorAt(from + (to - from) * (i + t) / spans, mixOklab(colors[i], colors[i + 1], t));
+        }
+    }
+}
+
+// The American flag: 13 stripes and a canton of 50 stars, or 7 stripes and fewer stars
+// when the area is too small to show them.
+void fillFlag(QPainter *p, const QRectF &r)
+{
+    static const QColor red(0xb2, 0x22, 0x34), white(0xff, 0xff, 0xff), blue(0x3c, 0x3b, 0x6e);
+    const int stripes = r.height() / 13 >= 3 ? 13 : 7;
+    const qreal sh = r.height() / stripes;
+    p->fillRect(r, white);
+    for (int i = 0; i < stripes; i += 2) {
+        p->fillRect(QRectF(r.left(), r.top() + i * sh, r.width(), sh), red);
+    }
+    const QRectF canton(r.left(), r.top(), r.width() * 0.4, sh * (stripes == 13 ? 7 : 4));
+    p->fillRect(canton, blue);
+
+    // Stars sit on a grid of rows x columns, every other point, as on the real flag
+    // (9 rows by 11 columns gives the 6-5-6 layout of 50 stars).
+    int rows = 9, cols = 11;
+    if (canton.height() / 10 < 4) {
+        rows = qBound(1, int(canton.height() / 3.4) - 1, 9);
+        const qreal e = canton.height() / (rows + 1);
+        cols = qMax(1, int(canton.width() / (e * 1.17)) - 1);
+        if (cols % 2 == 0) {
+            --cols;
+        }
+    }
+    const qreal ey = canton.height() / (rows + 1), gx = canton.width() / (cols + 1);
+    const qreal radius = 0.57 * qMin(ey, gx);
+    QPainterPath star;
+    if (radius >= 2.5) {
+        for (int i = 0; i < 10; ++i) {
+            const qreal a = -M_PI / 2 + i * M_PI / 5, len = i % 2 ? radius * 0.382 : radius;
+            const QPointF pt(len * std::cos(a), len * std::sin(a));
+            i ? star.lineTo(pt) : star.moveTo(pt);
+        }
+        star.closeSubpath();
+    } else {
+        star.addEllipse(QPointF(), radius * 0.8, radius * 0.8);
+    }
+    p->save();
+    p->setRenderHint(QPainter::Antialiasing, true);
+    p->setClipRect(canton, Qt::IntersectClip);
+    p->setPen(Qt::NoPen);
+    p->setBrush(white);
+    for (int row = 0; row < rows; ++row) {
+        for (int col = 1; col <= cols; ++col) {
+            if ((row + col) % 2 == 1) {
+                p->drawPath(star.translated(canton.left() + col * gx, canton.top() + (row + 1) * ey));
+            }
+        }
+    }
+    p->restore();
+}
+
+// Patterns that change from top to bottom. A terminal showing one of these can't use
+// Konsole's scroll shortcut (copying pixels up a line), or the pattern would scroll too.
+bool variesVertically(const TabPattern &pat)
+{
+    return (pat.pattern == QLatin1String("stripes") && pat.colors.size() >= 2) || pat.pattern == QLatin1String("flag");
+}
+
+// Fill `r` with the pattern (no clipping, opacity, or shape: callers set those). Tabs,
+// terminal tints and the strips along the top of terminals all go through here, so a
+// terminal shows the same pattern as its tab, drawn at the terminal's size.
 void fillPattern(QPainter *p, const QRectF &r, const TabPattern &pat)
 {
     const auto &c = pat.colors;
-    if (pat.pattern == QLatin1String("two-tone") && c.size() >= 2) {
-        const qreal mid = r.left() + r.width() / 2;
-        p->fillRect(QRectF(r.left(), r.top(), mid - r.left(), r.height()), c[0]);
-        p->fillRect(QRectF(mid, r.top(), r.right() - mid, r.height()), c[1]);
+    if (pat.pattern == QLatin1String("flag")) {
+        fillFlag(p, r);
+    } else if (pat.pattern == QLatin1String("two-tone") && c.size() >= 2) {
+        // Each color holds its half, with a short blend where they meet.
+        QLinearGradient grad(r.topLeft(), r.topRight());
+        grad.setColorAt(0, c[0]);
+        addStops(grad, {c[0], c[1]}, 0.44, 0.56);
+        grad.setColorAt(1, c[1]);
+        p->fillRect(r, grad);
     } else if (pat.pattern == QLatin1String("stripes") && c.size() >= 2) {
+        p->save();
+        p->setRenderHint(QPainter::Antialiasing, true);
         p->fillRect(r, c[0]);
-        const qreal w = 10;
+        const qreal w = qMax<qreal>(8, r.height() / 3);
         int i = 0;
         p->setPen(Qt::NoPen);
         for (qreal x = r.left() - r.height(); x < r.right(); x += w, ++i) {
@@ -852,11 +1212,10 @@ void fillPattern(QPainter *p, const QRectF &r, const TabPattern &pat)
             p->setBrush(c[i % c.size()]);
             p->drawPolygon(band);
         }
+        p->restore();
     } else if ((pat.pattern == QLatin1String("gradient") || pat.pattern == QLatin1String("rainbow")) && c.size() >= 2) {
         QLinearGradient grad(r.topLeft(), r.topRight());
-        for (int i = 0; i < c.size(); ++i) {
-            grad.setColorAt(double(i) / (c.size() - 1), c[i]);
-        }
+        addStops(grad, c, 0, 1);
         p->fillRect(r, grad);
     } else {
         p->fillRect(r, c[0]);
@@ -886,12 +1245,31 @@ void paintPattern(QPainter *p, const QRect &tabRect, const TabPattern &pat, bool
     p->setOpacity(tabOpacity(pat, selected));
     p->setPen(Qt::NoPen);
     fillPattern(p, r, pat);
+    if (pat.pattern == QLatin1String("flag")) {
+        p->fillRect(r, QColor(0, 0, 0, 120)); // a shade darker, so the title reads over the white stripes
+    }
+    // A soft light along the outer edge and a little shade toward the inner edge give the
+    // fill some depth. The selected tab gets no shade where it joins its terminal.
+    QLinearGradient sheen(south ? r.bottomLeft() : r.topLeft(), south ? r.topLeft() : r.bottomLeft());
+    sheen.setColorAt(0, QColor(255, 255, 255, selected ? 70 : 45));
+    sheen.setColorAt(0.45, QColor(255, 255, 255, 0));
+    sheen.setColorAt(1, QColor(0, 0, 0, selected ? 0 : 30));
+    p->fillRect(r, sheen);
     if (selected) {
         // Accent bar on the outer edge, in the title color so it shows on any pattern.
         p->setOpacity(0.9);
         const qreal h = 3;
         const QRectF bar = south ? QRectF(r.left(), r.bottom() - h, r.width(), h) : QRectF(r.left(), r.top(), r.width(), h);
         p->fillRect(bar, accent);
+    } else {
+        // A thin edge in the pattern's own colors keeps soft tabs from fading into the bar.
+        p->setOpacity(0.5);
+        p->setClipping(false);
+        p->setBrush(Qt::NoBrush);
+        QLinearGradient edge(r.topLeft(), r.topRight());
+        addStops(edge, pat.pattern == QLatin1String("flag") ? QVector<QColor>{QColor(0x3c, 0x3b, 0x6e), QColor(0xb2, 0x22, 0x34)} : pat.colors, 0, 1);
+        p->setPen(QPen(QBrush(edge), 1));
+        p->drawPath(path);
     }
     p->restore();
 }
@@ -900,6 +1278,13 @@ class TabPatternStyle : public QProxyStyle
 {
 public:
     using QProxyStyle::QProxyStyle;
+
+    static void setLabelColor(QStyleOptionTab *label, const QColor &color)
+    {
+        for (auto role : {QPalette::WindowText, QPalette::ButtonText, QPalette::Text, QPalette::BrightText}) {
+            label->palette.setColor(role, color);
+        }
+    }
 
     void drawControl(ControlElement element, const QStyleOption *option, QPainter *painter, const QWidget *widget) const override
     {
@@ -919,8 +1304,26 @@ public:
                     return;
                 }
                 QStyleOptionTab label(*tab);
-                for (auto role : {QPalette::WindowText, QPalette::ButtonText, QPalette::Text, QPalette::BrightText}) {
-                    label.palette.setColor(role, fg);
+                setLabelColor(&label, fg);
+                if (selected || pat.opacity > 0.4) {
+                    // A one-pixel shadow under the title: light titles always get a faint one,
+                    // and patterns with light and dark parts a stronger one.
+                    const bool light = luminance(fg) > 0.5;
+                    const int alpha = mixedContrast(pat) ? 190 : light ? 90 : 0;
+                    if (alpha > 0) {
+                        QStyleOptionTab shadow(label);
+                        setLabelColor(&shadow, light ? QColor(0, 0, 0, alpha) : QColor(255, 255, 255, alpha));
+                        if (!shadow.icon.isNull()) {
+                            // Keep the icon's space so the text lands in the same place.
+                            QPixmap blank(shadow.iconSize.isValid() ? shadow.iconSize : QSize(16, 16));
+                            blank.fill(Qt::transparent);
+                            shadow.icon = QIcon(blank);
+                        }
+                        painter->save();
+                        painter->translate(1, 1);
+                        QProxyStyle::drawControl(element, &shadow, painter, widget);
+                        painter->restore();
+                    }
                 }
                 QProxyStyle::drawControl(element, &label, painter, widget);
                 return;
@@ -933,12 +1336,16 @@ public:
 // ---------------------------------------------------------------------------
 // Terminal tint: carry the tab's colors into the terminal under it
 // ---------------------------------------------------------------------------
-// After Konsole paints a terminal, its background is tinted with the tab's colors:
-// Screen blending on a dark color scheme, Multiply on a light one, so the background
-// takes the color while text keeps its contrast. The tint only varies left to right,
-// which keeps it correct when Konsole scrolls by copying pixels up or down. A thin strip
-// of the tab's pattern runs along the top of the terminal; in a split tab the focused
-// pane's strip is drawn at full strength and the others faintly.
+// After Konsole paints a terminal, its background is tinted with the tab's pattern,
+// drawn at the terminal's size: Screen blending on a dark color scheme, Multiply on a
+// light one, so the background takes the color while text keeps its contrast. A thin
+// strip along the top of the terminal shows the top edge of the same pattern at full
+// strength; in a split tab the focused pane's strip is bright and the others faint.
+//
+// Konsole scrolls by copying pixels up a line and painting only the new line. That's
+// fine for patterns that only change left to right. For the ones that change top to
+// bottom (stripes, the flag) the terminal is marked as not opaque, which makes Qt
+// repaint it whole on a scroll instead, so the pattern stays put.
 
 constexpr int kBandHeight = 3;
 constexpr const char kBandName[] = "konsole_aware_band";
@@ -963,13 +1370,28 @@ protected:
     {
         QPainter p(this);
         p.setOpacity(strong ? 1.0 : 0.35);
-        fillPattern(&p, QRectF(rect()), pattern);
+        // Drawn at the terminal's size and cut to the strip, so it lines up with the tint.
+        const QSize area = parentWidget() ? parentWidget()->size() : size();
+        fillPattern(&p, QRectF(QPointF(0, 0), QSizeF(area.width(), qMax(area.height(), height()))), pattern);
     }
 };
 
 int terminalsIn(QWidget *page)
 {
     return page ? countTerminalDisplays(page) : 0;
+}
+
+// Konsole's scroll shortcut on (`on`) or off for one terminal; see above.
+void setFastScroll(QWidget *display, bool on)
+{
+    if (!display->property("konsole_aware_opaque").isValid()) {
+        display->setProperty("konsole_aware_opaque", display->testAttribute(Qt::WA_OpaquePaintEvent));
+    }
+    const bool want = on && display->property("konsole_aware_opaque").toBool();
+    if (display->testAttribute(Qt::WA_OpaquePaintEvent) != want) {
+        display->setAttribute(Qt::WA_OpaquePaintEvent, want);
+        display->update();
+    }
 }
 
 void syncBand(QWidget *display)
@@ -979,7 +1401,9 @@ void syncBand(QWidget *display)
     TabPattern pat;
     QTabWidget *tw = nullptr;
     int index = -1;
-    if (!patternForTerminal(display, &pat, &tw, &index) || !pat.band) {
+    const bool found = patternForTerminal(display, &pat, &tw, &index);
+    setFastScroll(display, !found || pat.tint <= 0 || !variesVertically(pat));
+    if (!found || !pat.band) {
         if (band) {
             band->hide();
         }
@@ -997,23 +1421,51 @@ void syncBand(QWidget *display)
     band->update();
 }
 
+// Patterns drawn in one fill can blend straight onto the terminal. The others (stripes,
+// the flag) are drawn once into an image per terminal, then blended, so the layers inside
+// the pattern don't blend with each other.
+struct TintImage {
+    QString key;
+    QImage image;
+};
+QHash<const QWidget *, TintImage> s_tintImages;
+
+const QImage &tintImage(QWidget *display, const TabPattern &pat)
+{
+    const qreal dpr = display->devicePixelRatioF();
+    QString key = pat.pattern + QString::number(display->width()) + QLatin1Char('x') + QString::number(display->height())
+        + QLatin1Char('@') + QString::number(dpr);
+    for (const QColor &c : pat.colors) {
+        key += c.name();
+    }
+    TintImage &cached = s_tintImages[display];
+    if (cached.key != key) {
+        if (cached.key.isEmpty()) {
+            QObject::connect(display, &QObject::destroyed, qApp, [display]() { s_tintImages.remove(display); });
+        }
+        cached.key = key;
+        cached.image = QImage(display->size() * dpr, QImage::Format_ARGB32_Premultiplied);
+        cached.image.setDevicePixelRatio(dpr);
+        cached.image.fill(Qt::transparent);
+        QPainter ip(&cached.image);
+        fillPattern(&ip, QRectF(display->rect()), pat);
+    }
+    return cached.image;
+}
+
 void paintTint(QWidget *display, const QRegion &region, const TabPattern &pat)
 {
+    const bool layered = variesVertically(pat);
     QPainter p(display);
     p.setClipRegion(region);
     const bool dark = luminance(display->palette().color(display->backgroundRole())) < 0.5;
     p.setCompositionMode(dark ? QPainter::CompositionMode_Screen : QPainter::CompositionMode_Multiply);
-    p.setOpacity(pat.tint);
-    const QRectF r(display->rect());
-    if (pat.colors.size() >= 2) {
-        // Patterns become a smooth left-to-right blend: hard edges would split the text area.
-        QLinearGradient grad(r.topLeft(), r.topRight());
-        for (int i = 0; i < pat.colors.size(); ++i) {
-            grad.setColorAt(double(i) / (pat.colors.size() - 1), pat.colors[i]);
-        }
-        p.fillRect(r, grad);
+    // White is the strongest tint there is, so the flag goes on lighter than the others.
+    p.setOpacity(pat.pattern == QLatin1String("flag") ? pat.tint * 0.75 : pat.tint);
+    if (layered) {
+        p.drawImage(QPointF(0, 0), tintImage(display, pat));
     } else {
-        p.fillRect(r, pat.colors[0]);
+        fillPattern(&p, QRectF(display->rect()), pat);
     }
 }
 
@@ -1267,6 +1719,7 @@ void injectActions(QMenu *self, const TabCtx &ctx)
         {"Rainbow", "rainbow"},
         {"Stripes", "stripes"},
         {"Solid", "solid"},
+        {"American Flag", "flag"},
     };
     for (const auto &pc : s_patternChoices) {
         addTabCliAction(menuPattern, QString::fromUtf8(pc.label), ctx,

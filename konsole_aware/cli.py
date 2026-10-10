@@ -1042,7 +1042,9 @@ def _swatch(colors: List[str], pattern: str = "solid") -> str:
     if not colors:
         return ""
     cells = 8
-    if pattern == "two-tone" and len(colors) >= 2:
+    if pattern == "flag":
+        picks = ["#3c3b6e"] * 3 + ["#b22234", "#ffffff"] * 2 + ["#b22234"]
+    elif pattern == "two-tone" and len(colors) >= 2:
         picks = [colors[0]] * (cells // 2) + [colors[1]] * (cells - cells // 2)
     elif len(colors) >= 2:
         picks = [colors[min(len(colors) - 1, i * len(colors) // cells)] for i in range(cells)]
@@ -1144,6 +1146,44 @@ def cmd_refresh(args: argparse.Namespace) -> int:
     tab = getattr(args, "tab", None)
     service = getattr(args, "service", None)
     return refresh_all_tabs(service=service, session_num=tab)
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    """New releases on GitHub: status, check, install, skip, later."""
+    from konsole_aware import update
+    action = args.update_action or "status"
+    if action == "install":
+        return update.install()
+    if action == "skip":
+        state = update.skip(args.value)
+        print(f"Skipping {state.get('skipped') or 'nothing'}. You'll hear about the next release.")
+        return 0
+    if action == "later":
+        hours = float(args.value or 24)
+        update.snooze(hours)
+        print(f"The update reminder is hidden for {hours:g} hours.")
+        return 0
+    if action == "check":
+        if args.auto:
+            update.check()  # quiet: the library runs this every hour
+            return 0
+        state = update.check(force=True)
+    else:
+        state = update.status()
+    latest = state.get("latest")
+    when = state.get("checked")
+    print(f"Installed: {state['current']} ({state.get('method') or update.install_method()})")
+    if not latest:
+        print("Latest: not checked yet. Run: konsole-aware update check")
+    elif state["show"] or update.is_newer(latest, state["current"]):
+        print(f"Latest: {latest}, ready to install with: konsole-aware update install")
+        print(f"What's new: {state.get('url')}")
+    else:
+        print(f"Latest: {latest}. You're up to date.")
+    if when:
+        print(f"Last checked: {time.strftime('%Y-%m-%d %H:%M', time.localtime(when))}"
+              + (f" ({state['error']})" if state.get("error") else ""))
+    return 0
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -1340,15 +1380,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_colors.add_argument("colors_action", nargs="?", choices=["list", "set", "reset", "auto", "position"], default="list")
     p_colors.add_argument("project", nargs="?", default="", help="Project name (folder name of its root)")
     p_colors.add_argument("colors", nargs="*", default=[], help="One or more colors (names or hex)")
-    p_colors.add_argument("--pattern", choices=["solid", "two-tone", "gradient", "rainbow", "stripes"],
+    p_colors.add_argument("--pattern", choices=["solid", "two-tone", "gradient", "rainbow", "stripes", "flag"],
                           help="Pattern for this project's tabs")
     p_colors.add_argument("--no-snap", action="store_true", help="With auto: do not move tabs")
     _add_target(p_colors)
     p_colors.set_defaults(func=cmd_colors)
 
-    p_tstyle = subparsers.add_parser("tab-style", help="Pattern for one tab: solid, two-tone, gradient, rainbow, stripes")
-    p_tstyle.add_argument("pattern", nargs="?", choices=["solid", "two-tone", "gradient", "rainbow", "stripes"])
-    p_tstyle.add_argument("colors", nargs="*", default=[], help="Colors (names or hex); rainbow needs none")
+    p_tstyle = subparsers.add_parser("tab-style", help="Pattern for one tab: solid, two-tone, gradient, rainbow, stripes, flag")
+    p_tstyle.add_argument("pattern", nargs="?", choices=["solid", "two-tone", "gradient", "rainbow", "stripes", "flag"])
+    p_tstyle.add_argument("colors", nargs="*", default=[], help="Colors (names or hex); rainbow and flag need none")
     p_tstyle.add_argument("--clear", action="store_true", help="Go back to the project pattern")
     _add_target(p_tstyle)
     p_tstyle.set_defaults(func=cmd_tab_style)
@@ -1356,6 +1396,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_install = subparsers.add_parser("install", help="Install hooks and shell integration")
     p_install.add_argument("--no-menu", action="store_true", help="Skip building the tab context-menu hook")
     p_install.set_defaults(func=cmd_install)
+
+    p_update = subparsers.add_parser("update", help="New releases: status, check, install, skip [version], later [hours]")
+    p_update.add_argument("update_action", nargs="?", choices=["status", "check", "install", "skip", "later"])
+    p_update.add_argument("value", nargs="?", help="Version for skip, hours for later")
+    p_update.add_argument("--auto", action="store_true", help=argparse.SUPPRESS)
+    p_update.set_defaults(func=cmd_update)
 
     p_uninstall = subparsers.add_parser("uninstall", help="Uninstall hooks and shell integration")
     p_uninstall.set_defaults(func=cmd_uninstall)

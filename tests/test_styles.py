@@ -63,6 +63,37 @@ class TestProjectColors(unittest.TestCase):
         self.assertTrue(settings["follow_position"])
         self.assertFalse(styles.window_settings({})["follow_position"])  # off by default
 
+    def test_flag_pattern(self):
+        flag = styles.build_spec("alpha", "#d97757", override={"pattern": "flag"}, config={})
+        self.assertEqual((flag["pattern"], flag["colors"]), ("flag", styles.FLAG))
+        self.assertEqual(styles.build_spec("alpha", None, config={"tab_pattern": "flag"})["pattern"], "flag")
+
+    def test_flag_is_random_per_tab_and_stable(self):
+        seeds = [f"org.kde.konsole-1:/Sessions/{i}" for i in range(400)]
+        picked = [s for s in seeds if styles.flag_pick(s, 0.1)]
+        self.assertTrue(20 < len(picked) < 60)  # about 1 in 10
+        self.assertEqual(picked, [s for s in seeds if styles.flag_pick(s, 0.1)])  # same tab, same answer
+        self.assertFalse(any(styles.flag_pick(s, 0) for s in seeds))  # 0 turns it off
+        spec = styles.build_spec("alpha", "#d97757", config={"flag_chance": 0.1}, seed=picked[0])
+        self.assertEqual(spec["pattern"], "flag")
+        # A pattern the user chose wins over the flag.
+        chosen = styles.build_spec("alpha", None, override={"pattern": "rainbow"}, config={}, seed=picked[0])
+        self.assertEqual(chosen["pattern"], "rainbow")
+
+    def test_old_palette_moves_to_new(self):
+        styles.PROJECT_COLORS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        styles.PROJECT_COLORS_FILE.write_text(json.dumps({
+            "old": {"color": styles.LEGACY_PALETTE[2]}, "mine": {"color": "#123456"},
+            "custom": {"color": styles.LEGACY_PALETTE[0], "colors": [styles.LEGACY_PALETTE[0], "#ffffff"]}}))
+        self.assertEqual(styles.project_entry("old")["color"], styles.PROJECT_PALETTE[2])
+        self.assertEqual(styles.project_entry("mine")["color"], "#123456")
+        self.assertEqual(styles.project_colors()["custom"]["color"], styles.LEGACY_PALETTE[0])
+
+    def test_shift_is_a_close_valid_color(self):
+        for c in styles.PROJECT_PALETTE + ["#ffffff", "#000000", "#ff0000"]:
+            out = styles._shift(c)
+            self.assertRegex(out, r"^#[0-9a-f]{6}$")
+
 
 if __name__ == "__main__":
     unittest.main()

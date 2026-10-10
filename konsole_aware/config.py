@@ -84,8 +84,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "combine_split_tab_titles": True,  # split tab with several agents: one combined title on every pane
     # Patterned tab backgrounds, painted by the context-menu library inside Konsole:
     # "project-status" (two-tone: project color | agent/status color), "project" (solid
-    # project color), "gradient", "two-tone", "stripes", "rainbow", or "none".
+    # project color), "gradient", "two-tone", "stripes", "rainbow", "flag", or "none".
     "tab_pattern": "project-status",
+    "flag_chance": 0.1,
+    "update_check": True,            # look for new releases on GitHub; a notification and a tray icon when one is out
+    "update_check_hours": 12,        # how often to look              # share of tabs that get the American flag instead of their colors (0 turns it off)
     "tab_pattern_opacity": 0.6,      # strength of unselected tab fills; the selected tab is drawn at full strength
     "terminal_tint": 0.2,            # tint each terminal's background with its tab's colors (0 turns it off, max 0.5)
     "terminal_band": True,           # a strip of the tab's colors along the top of its terminal

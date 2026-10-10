@@ -7,10 +7,10 @@ effort that agent is on, and whether it is working, done, or waiting on you. A p
 ![Konsole tab bar with Claude, agy and shell tabs for three projects, each tab filled with its project color](docs/screenshots/tab-bar.png)
 
 That screenshot has three projects. The selected `storefront` Claude tab is editing `Checkout.tsx` in accept-edits
-mode, and its terminal is tinted with the tab's colors. The agy tab next to it finished in 42 seconds, and the third
+mode. Its tab is two-tone, the project's blue and Claude's orange, and its terminal shows the same two colors. The agy tab next to it finished in 42 seconds, and the third
 `storefront` tab is a plain shell running a dev server. The `api-gateway` Claude tab is in plan mode on Fable 5.1 at
 max effort, waiting for its plan to be approved. The `Nightly Retrain` tab is a Claude session named with `/rename`,
-with two background agents still running.
+with two background agents still running, and it drew the American flag.
 
 ## Contents
 
@@ -45,7 +45,8 @@ with two background agents still running.
 - Shows ultracode, background agents, workflows and shells, so a turn with work still running doesn't read as done.
 - Uses a Claude Code session's name (`/rename`) or an agy `--project` as the project name.
 - Gives every project its own color and fills the tab with it, two-tone with the agent's color by default. The
-  selected tab stands out, and each terminal's background is tinted to match its tab.
+  selected tab stands out, and each terminal's background shows the same pattern as its tab. About one tab in ten
+  gets the American flag instead.
 - Puts tabs of the same project next to each other (Claude first, then agy) and can merge them into one split tab.
 - Tracks ordinary shell commands too: builds, tests, transfers, package managers, ssh, dev servers, `tail -f`, with exit
   codes and run times.
@@ -81,21 +82,22 @@ curl -fsSL https://raw.githubusercontent.com/sworrl/konsole-aware/HEAD/get.sh | 
 
 ### Debian, Ubuntu, KDE neon (.deb)
 
-Download the `.deb` from the [latest release](https://github.com/sworrl/konsole-aware/releases/latest), then:
-
 ```bash
-sudo apt install ./konsole-aware_1.2.0_amd64.deb
+curl -fLO https://github.com/sworrl/konsole-aware/releases/latest/download/konsole-aware_amd64.deb
+sudo apt install ./konsole-aware_amd64.deb
 konsole-aware install
 ```
 
 ### Fedora (.rpm)
 
-Download the `.rpm` from the [latest release](https://github.com/sworrl/konsole-aware/releases/latest), then:
-
 ```bash
-sudo dnf install ./konsole-aware-1.2.0-1.*.x86_64.rpm
+sudo dnf install https://github.com/sworrl/konsole-aware/releases/latest/download/konsole-aware.x86_64.rpm
 konsole-aware install
 ```
+
+Those links always point at the newest release. Every release also has the same files with the version in the name
+(`konsole-aware_1.3.0_amd64.deb`, `konsole-aware-1.3.0-1.fc44.x86_64.rpm`) on the
+[releases page](https://github.com/sworrl/konsole-aware/releases).
 
 The packages put the program in `/usr/lib/konsole-aware` with the right-click menu already built, so no compiler is
 needed. A package can't edit your shell config or your Claude Code settings, so each user runs `konsole-aware install`
@@ -297,18 +299,32 @@ konsole-aware fills the whole tab:
 | Pattern | What it looks like |
 | :--- | :--- |
 | `project-status` (default) | Two-tone: the project's color on the left, the agent or state color on the right. Plain shells get the solid project color |
-| `two-tone` | Two colors, split down the middle |
+| `two-tone` | Two colors, each holding its half, with a short blend where they meet |
 | `gradient` | A smooth blend through two or more colors |
-| `rainbow` | A full spectrum |
+| `rainbow` | Red to violet, all at the same lightness so the title reads the same across the tab |
 | `stripes` | Diagonal stripes of two or more colors |
+| `flag` | The American flag: stripes and a canton of stars |
 | `solid` | One color |
+
+Each pattern selected, with its terminal under it:
+
+![Six tab bars, one per pattern: two-tone, gradient, rainbow, stripes, flag and solid, each with the selected tab's terminal showing the same pattern](docs/screenshots/patterns.png)
+
+Gradients are mixed in OKLab rather than RGB, so the colors in the middle of a blend stay as bright and clean as the
+ends instead of going gray or brown. A gradient given only one color pairs it with a neighboring hue.
+
+Now and then a tab gets the American flag instead of its usual colors, about one tab in ten. The pick comes from the
+tab's id, so a tab keeps the flag for as long as it's open, and a new tab rolls again. A pattern you chose for a tab
+or project always wins over it. Set `"flag_chance": 0` to turn it off, or `konsole-aware tab-style flag` to get it on
+purpose.
 
 The selected tab is drawn at full strength, fills its whole cell down to the terminal, and has an accent bar along
 its top edge. Other tabs are drawn softer (`tab_pattern_opacity`). Titles are drawn in black or white, whichever reads
 better on the pattern.
 
-The tab's colors carry into its terminal: the background is tinted with them (`terminal_tint`), and a thin strip of
-the pattern runs along the top of the terminal (`terminal_band`). On a dark color scheme the tint lifts the background
+The tab's pattern carries into its terminal. The background is tinted with the same pattern, drawn at the terminal's
+size (`terminal_tint`): a two-tone tab gives a two-tone terminal, a striped tab a striped one, and the flag a flag. A
+thin strip along the top of the terminal shows the top edge of that pattern at full strength (`terminal_band`). On a dark color scheme the tint lifts the background
 toward the color; on a light one it darkens it, and text keeps its contrast either way. In a split tab every pane
 uses the tab's colors, so tabs joined with Attach Tab To… or `pair` share one color, and the focused pane's strip is
 drawn brighter than the others.
@@ -326,7 +342,7 @@ so neighboring projects don't look alike, and are remembered in `~/.config/konso
 | `konsole-aware colors auto` | Gives every open project a color and snaps each project's tabs together (`--no-snap` to only color) |
 | `konsole-aware colors set storefront "#ff5500" violet --pattern gradient` | Your own colors and pattern for a project |
 | `konsole-aware colors reset storefront` | Back to an automatic color |
-| `konsole-aware tab-style rainbow` | One tab only: `solid`, `two-tone`, `gradient`, `rainbow`, `stripes` |
+| `konsole-aware tab-style rainbow` | One tab only: `solid`, `two-tone`, `gradient`, `rainbow`, `stripes`, `flag` |
 | `konsole-aware tab-style gradient "#2563eb" "#db2777"` | One tab with your own colors |
 | `konsole-aware tab-style --clear` | That tab goes back to its project's pattern |
 
@@ -352,6 +368,10 @@ picker. Set `"tab_pattern": "none"` to turn the fills off and keep Konsole's lin
 | `konsole-aware install [--no-menu]` | Sets up hooks and shell integration for your user |
 | `konsole-aware uninstall` | Takes them back out |
 | `konsole-aware alert "Title" "Body" [--error]` | Sends a test notification |
+| `konsole-aware update` | Shows the installed and latest versions |
+| `konsole-aware update check` | Looks on GitHub for a new release now |
+| `konsole-aware update install` | Installs the latest release the same way you installed this one |
+| `konsole-aware update skip [version]`, `update later [hours]` | Stops the reminder for that release, or hides it for a while (24 hours by default) |
 | `konsole-aware daemon` | Optional background poller for shells that don't load the integration |
 
 `konsole-aware agent`, `preexec`, `precmd` and `watchdog` are called by the hooks.
@@ -359,6 +379,8 @@ picker. Set `"tab_pattern": "none"` to turn the fills off and keep Konsole's lin
 ## Tab right-click menu
 
 Right-click a tab (in a Konsole started from the launcher):
+
+![The tab right-click menu with the konsole-aware items and the Tab Pattern submenu open](docs/screenshots/menu.png)
 
 | Item | What it does |
 | :--- | :--- |
@@ -403,7 +425,10 @@ your file alone.
 | `auto_snap_agents` | `true` | Moves a tab next to its project's other tabs when an agent starts in it |
 | `snap_include_user_sessions` | `true` | Also pulls plain shells of the project together when snapping |
 | `title_order` | `["job", "pin", "group", "identity", "model", "mode", "activity", "dot", "status"]` | Order of the parts of a tab title. Parts you leave out are added at the end |
-| `tab_pattern` | `"project-status"` | Tab fill: `project-status`, `project`, `two-tone`, `gradient`, `rainbow`, `stripes`, `solid`, or `none` |
+| `tab_pattern` | `"project-status"` | Tab fill: `project-status`, `project`, `two-tone`, `gradient`, `rainbow`, `stripes`, `flag`, `solid`, or `none` |
+| `flag_chance` | `0.1` | Share of tabs that get the American flag instead of their colors, 0 (off) to 1 |
+| `update_check` | `true` | Look for new releases on GitHub, with a notification and a tray icon when one is out |
+| `update_check_hours` | `12` | How often to look |
 | `tab_pattern_opacity` | `0.6` | Strength of unselected tab fills, 0.15 to 1. The selected tab is always full strength |
 | `terminal_tint` | `0.2` | How strongly each terminal's background takes its tab's colors, 0 (off) to 0.5 |
 | `terminal_band` | `true` | Strip of the tab's colors along the top of its terminal |
@@ -437,9 +462,10 @@ Every key and its default is in `DEFAULT_CONFIG` in [`konsole_aware/config.py`](
 | `KONSOLE_AWARE_STATE_DIR` | Where tab state is kept | `$XDG_RUNTIME_DIR/konsole-aware` |
 | `KONSOLE_AWARE_QDBUS` | Which `qdbus` to use when PyGObject isn't installed | first of `qdbus6`, `qdbus-qt6`, `qdbus`, `qdbus-qt5` |
 | `KONSOLE_AWARE_KEEP_ELIDE` | Set it to keep Konsole cutting titles at the start | unset |
+| `KONSOLE_AWARE_NO_UPDATES` | Set it to stop the menu library from running the update check and showing the tray icon | unset |
 | `KONSOLE_AWARE_NO_PATTERNS` | Set it to turn off the tab fills and terminal tint in the menu library | unset |
 | `KONSOLE_AWARE_DEBUG` | Set it to log the menu library's tab and pattern lookups to the journal | unset |
-| `KONSOLE_AWARE_GRAB` | A `.png` path. Creating `<path>.request` saves each Konsole window there; used for the README screenshots | unset |
+| `KONSOLE_AWARE_GRAB` | A `.png` path. Creating `<path>.request` saves each Konsole window there. If the request file reads `menu <tab> [<submenu>]`, it opens that tab's right-click menu (and submenu) first and the picture includes it. Used for the README screenshots | unset |
 | `KONSOLE_AWARE_HOME`, `KONSOLE_AWARE_REPO` | Where `get.sh` clones to, and from | `~/.local/share/konsole-aware`, this repo |
 | `KONSOLE_AWARE_NO_DBUS`, `KONSOLE_AWARE_TERMINAL=null`, `KONSOLE_AWARE_SESSION_KEY` | Used by the tests: no D-Bus, a terminal that writes nothing, a fixed tab key | unset |
 | `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR` | Base folders for config and state | `~/.config`, `/run/user/<uid>` |
@@ -486,8 +512,9 @@ konsole-aware/
 │   ├── tasks/classifier.py        # what kind of shell command is running
 │   ├── daemon/watcher.py          # scanning for list, watch and daemon
 │   ├── notify/notifier.py         # notify-send, sounds, rate limit
+│   ├── update.py                  # new release check on GitHub, update install
 │   └── state/manager.py           # the locked state file
-├── menu_hook/                     # right-click menu, tab fills and terminal tint (C++17, Qt 6)
+├── menu_hook/                     # right-click menu, tab fills, terminal tint, update tray icon (C++17, Qt 6)
 ├── shell/                         # zsh and bash integration
 ├── packaging/                     # .deb and .rpm build scripts
 ├── systemd/konsole-aware.service  # optional daemon unit
@@ -555,8 +582,11 @@ window's `ViewManager::sessionList` and runs the CLI with `--tab` and `--service
 
 **Tab fills and terminal tint** (`tabs/styles.py`, `menu_hook/`). konsole-aware writes one fill spec per tab to
 `$XDG_RUNTIME_DIR/konsole-aware/styles/tab-styles.json`. The menu library watches that folder, and a Qt style on each
-tab bar paints the tab from it. Each terminal gets a paint filter that blends the tab's colors into the background
-after Konsole draws it, plus a 3 px strip widget along the top. Tabs are matched to their spec by their index in the
+tab bar paints the tab from it. Each terminal gets a paint filter that blends the tab's pattern into the background
+after Konsole draws it, plus a 3 px strip widget along the top. Tabs, tints and strips all go through one fill
+function, so they always match. Konsole scrolls by copying pixels up a line and painting only the new line, which is
+fine for patterns that only change left to right. For stripes and the flag, which change top to bottom, the library
+marks the terminal as not opaque, so Qt repaints it whole on a scroll and the pattern stays put. Tabs are matched to their spec by their index in the
 tab bar, which stays right while you drag a tab.
 
 **Keeping the desktop responsive.** D-Bus calls go through GLib inside the process (about 1 ms each) instead of
@@ -599,7 +629,7 @@ python3 -m pytest -q
 
 ```text
 .........................................................................................
-107 passed in 1.0s
+117 passed in 1.1s
 ```
 
 The tests don't need Konsole and don't touch your setup. `tests/conftest.py` points config and state at a temp
@@ -654,13 +684,38 @@ the GitHub release with that version's notes from `CHANGELOG.md`.
 
 ## Updating
 
+konsole-aware looks for new releases on GitHub by itself. A little after Konsole starts, and then every hour, the
+right-click menu library runs `konsole-aware update check --auto`, which only asks GitHub when the last look is
+older than `update_check_hours` (12 by default). When a newer release is out you get one notification for it, and a
+tray icon shows up until you update or dismiss it. Its menu has:
+
+| Item | What it does |
+| :--- | :--- |
+| Install Update… | Opens a Konsole window running `konsole-aware update install`, which asks for your password |
+| What's New | Opens the release page (so does a left click on the icon) |
+| Remind Me Tomorrow | Hides the icon for 24 hours |
+| Skip This Version | Hides it until the next release |
+
+`konsole-aware update install` updates the same way you installed:
+
+| Installed with | What `update install` does |
+| :--- | :--- |
+| `.deb` | Downloads the new `.deb` and runs `sudo apt-get install` on it |
+| `.rpm` | Downloads the new `.rpm` and runs `sudo dnf install` (or `zypper`, or `rpm -U`) |
+| One line or source | `git pull --ff-only` in the checkout |
+
+Then it runs `konsole-aware install` for your user and `konsole-aware refresh`. To update by hand instead:
+
 | Installed with | Update with |
 | :--- | :--- |
 | One line | Run the same `curl … \| bash` again |
 | `.deb` / `.rpm` | Install the newer package, then `konsole-aware install` |
 | Source | `git pull && ./install.sh` |
 
-Then `konsole-aware refresh` redraws your open tabs. Running agents pick up the new code on their next event. The
+The check sends one request to `api.github.com` with a `konsole-aware/<version>` user agent and nothing else. Set
+`"update_check": false` to turn it off; `konsole-aware update check` still works by hand.
+
+`konsole-aware refresh` redraws your open tabs. Running agents pick up the new code on their next event. The
 right-click menu, tab fills and terminal tint need a Konsole restart.
 
 The optional daemon covers shells that don't load the integration, like a shell started with `--norc`. You don't need

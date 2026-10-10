@@ -13,5 +13,8 @@ a public issue. Include the steps to reproduce it and the version or commit you'
 
 - The agent hooks only watch. They never approve, deny or rewrite a tool call.
 - Tab state is kept in `$XDG_RUNTIME_DIR/konsole-aware`, which only you can read (mode 0700).
-- Nothing is sent over the network.
+- The only network traffic is the release check: one request to `api.github.com` every 12 hours at most, with a
+  `konsole-aware/<version>` user agent and nothing else. `"update_check": false` turns it off. Updates are only
+  installed when you pick Install Update… or run `konsole-aware update install`, and the package manager asks for your
+  password first.
 - The Konsole library removes itself from `LD_PRELOAD` when it loads, so the programs you run in your tabs don't load it.

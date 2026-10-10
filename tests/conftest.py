@@ -11,6 +11,7 @@ import tempfile
 
 _ROOT = tempfile.mkdtemp(prefix="konsole-aware-tests-")
 os.environ["XDG_CONFIG_HOME"] = os.path.join(_ROOT, "config")
+os.environ["XDG_CACHE_HOME"] = os.path.join(_ROOT, "cache")
 os.environ["KONSOLE_AWARE_STATE_DIR"] = os.path.join(_ROOT, "state")
 os.environ["KONSOLE_AWARE_TERMINAL"] = "null"
 os.environ["KONSOLE_AWARE_NO_DBUS"] = "1"
